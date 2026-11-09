@@ -18,6 +18,10 @@ pub const BORDER: Color32 = Color32::from_rgb(0x27, 0x27, 0x2a);
 pub const DOT_INACTIVE: Color32 = Color32::from_rgb(0x3f, 0x3f, 0x46);
 /// zinc-400, secondary text.
 pub const TEXT_DIM: Color32 = Color32::from_rgb(0xa1, 0xa1, 0xaa);
+/// zinc-500, labels and idle icons.
+pub const TEXT_MUTED: Color32 = Color32::from_rgb(0x71, 0x71, 0x7a);
+/// zinc-600, faint captions.
+pub const TEXT_FAINT: Color32 = Color32::from_rgb(0x52, 0x52, 0x5b);
 /// zinc-100, primary text.
 pub const TEXT: Color32 = Color32::from_rgb(0xf4, 0xf4, 0xf5);
 /// orange-500.
@@ -174,7 +178,8 @@ pub fn install(ctx: &egui::Context) {
     ctx.set_visuals(visuals());
 }
 
-fn with_alpha(color: Color32, alpha: f32) -> Color32 {
+/// `color` with its alpha replaced by `alpha` (0..=1).
+pub fn with_alpha(color: Color32, alpha: f32) -> Color32 {
     let [r, g, b, _] = color.to_array();
     Color32::from_rgba_unmultiplied(r, g, b, (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
@@ -192,7 +197,18 @@ pub fn glow_layer_count(intensity: f32) -> usize {
 /// drop shadow, and a colored halo (`0 0 20px color33`) scaled by `glow` (0..=1).
 /// `border` is also the glow color.
 pub fn paint_card(painter: &Painter, rect: Rect, border: Color32, glow: f32) {
-    let radius = CornerRadius::same(CARD_RADIUS);
+    paint_card_with_radius(painter, rect, border, glow, CARD_RADIUS);
+}
+
+/// [`paint_card`] with another corner radius (pulse cards use 16, `rounded-2xl`).
+pub fn paint_card_with_radius(
+    painter: &Painter,
+    rect: Rect,
+    border: Color32,
+    glow: f32,
+    radius: u8,
+) {
+    let radius = CornerRadius::same(radius);
     let glow = if glow.is_nan() {
         0.0
     } else {
@@ -250,22 +266,60 @@ pub fn paint_glow(painter: &Painter, center: Pos2, radius: f32, color: Color32, 
     }
 }
 
-/// 4 px orange-500 to orange-300 gradient line along the top edge of a card, at 50 % opacity.
-/// Clipped to the card's rounded corners by inset.
+/// Horizontal inset of a rounded rect's outline at height `y`: how far the
+/// curved corner pulls the edge in, 0 away from the corners.
+fn corner_inset(rect: Rect, radius: f32, y: f32) -> f32 {
+    let dist = (y - rect.min.y).min(rect.max.y - y).max(0.0);
+    if dist >= radius {
+        return 0.0;
+    }
+    let d = radius - dist;
+    radius - (radius * radius - d * d).max(0.0).sqrt()
+}
+
+/// Fills `band` (a horizontal strip, e.g. a bar along a card edge) where it
+/// lies inside the rounded rect `card` (corner `radius`), with per-x color
+/// `color_at`. Stands in for CSS `overflow-hidden` on rounded cards.
+fn paint_clipped_band(
+    painter: &Painter,
+    card: Rect,
+    radius: f32,
+    band: Rect,
+    color_at: impl Fn(f32) -> Color32,
+) {
+    const ROWS: usize = 8;
+    let radius = radius.min(card.width() * 0.5).min(card.height() * 0.5);
+    let mut mesh = Mesh::default();
+    for i in 0..=ROWS {
+        let y = band.min.y + band.height() * i as f32 / ROWS as f32;
+        let inset = corner_inset(card, radius, y);
+        let xl = band.min.x.max(card.min.x + inset);
+        let xr = band.max.x.min(card.max.x - inset).max(xl);
+        mesh.colored_vertex(Pos2::new(xl, y), color_at(xl));
+        mesh.colored_vertex(Pos2::new(xr, y), color_at(xr));
+        if i > 0 {
+            let b = (2 * i) as u32;
+            mesh.add_triangle(b - 2, b - 1, b + 1);
+            mesh.add_triangle(b - 2, b + 1, b);
+        }
+    }
+    painter.add(mesh);
+}
+
+/// Fills `band` with `color`, clipped to the rounded rect `card`.
+pub fn paint_band(painter: &Painter, card: Rect, radius: f32, band: Rect, color: Color32) {
+    paint_clipped_band(painter, card, radius, band, |_| color);
+}
+
+/// 4 px orange-500 to orange-300 gradient line along the top edge of a card
+/// (inside its 1 px border), at 50 % opacity, clipped to the card's rounded
+/// top corners like the web's `overflow-hidden`.
 pub fn paint_top_accent(painter: &Painter, rect: Rect) {
-    let inset = f32::from(CARD_RADIUS) * 0.5;
-    let line = Rect::from_min_max(
-        Pos2::new(rect.min.x + inset, rect.min.y + 1.0),
-        Pos2::new(rect.max.x - inset, rect.min.y + 5.0),
-    );
+    let inner = rect.shrink(1.0);
+    let band = Rect::from_min_size(inner.min, egui::vec2(inner.width(), 4.0));
     let left = with_alpha(ACCENT, 0.5);
     let right = with_alpha(ACCENT_LIGHT, 0.5);
-    let mut mesh = Mesh::default();
-    mesh.colored_vertex(line.left_top(), left);
-    mesh.colored_vertex(line.right_top(), right);
-    mesh.colored_vertex(line.right_bottom(), right);
-    mesh.colored_vertex(line.left_bottom(), left);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    painter.add(mesh);
+    paint_clipped_band(painter, inner, f32::from(CARD_RADIUS) - 1.0, band, |x| {
+        left.lerp_to_gamma(right, (x - inner.min.x) / inner.width())
+    });
 }

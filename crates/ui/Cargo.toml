@@ -15,6 +15,9 @@ workspace = true
 
 [dependencies]
 egui.workspace = true
+serde.workspace = true
+polyrhythmic-metronome-core = { path = "../core" }
+polyrhythmic-metronome-audio = { path = "../audio" }
 
 [dev-dependencies]
 egui_kittest.workspace = true
