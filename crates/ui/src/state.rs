@@ -46,6 +46,8 @@ pub enum UiAction {
 #[derive(Clone, Copy, Debug)]
 struct Lit {
     beat: u32,
+    /// Audio frame of the hit, to tell hits of one instant from stale ones.
+    frame: u64,
     /// 1 right after the beat, springs back to 0.
     flash: Spring,
 }
@@ -63,6 +65,8 @@ pub struct UiState {
     tap_epoch: Instant,
     pending: VecDeque<BeatEvent>,
     lit: HashMap<PulseId, Lit>,
+    /// Per pulse, one spring per beat: 0 idle, 1 lit. Drives the topology dots.
+    dots: HashMap<PulseId, Vec<Spring>>,
     settings_open: HashSet<PulseId>,
     /// While a pulse card is dragged by its handle: (from, current target) indices.
     pub(crate) dragging: Option<(usize, usize)>,
@@ -82,6 +86,7 @@ impl Default for UiState {
             tap_epoch: Instant::now(),
             pending: VecDeque::with_capacity(PENDING_BEATS_CAP),
             lit: HashMap::new(),
+            dots: HashMap::new(),
             settings_open: HashSet::new(),
             dragging: None,
         }
@@ -123,6 +128,7 @@ impl UiState {
                 ev.pulse,
                 Lit {
                     beat: ev.beat,
+                    frame: ev.frame,
                     flash,
                 },
             );
@@ -131,6 +137,20 @@ impl UiState {
         self.lit.retain(|id, _| pattern.pulse(*id).is_some());
         for lit in self.lit.values_mut() {
             lit.flash.step(dt);
+        }
+        self.dots.retain(|id, _| pattern.pulse(*id).is_some());
+        for pulse in &pattern.pulses {
+            let lit_beat = self
+                .lit
+                .get(&pulse.id)
+                .filter(|_| pulse.enabled)
+                .map(|l| l.beat as usize);
+            let springs = self.dots.entry(pulse.id).or_default();
+            springs.resize(pulse.beats as usize, Spring::new(0.0));
+            for (i, spring) in springs.iter_mut().enumerate() {
+                spring.target = if lit_beat == Some(i) { 1.0 } else { 0.0 };
+                spring.step(dt);
+            }
         }
     }
 
@@ -151,16 +171,56 @@ impl UiState {
         self.pending.len()
     }
 
+    /// How active dot `beat` of `pulse` is: 0 idle, 1 lit (springs, may overshoot a little).
+    pub fn dot(&self, pulse: PulseId, beat: u32) -> f32 {
+        self.dots
+            .get(&pulse)
+            .and_then(|springs| springs.get(beat as usize))
+            .map_or(0.0, |s| s.value.clamp(0.0, 1.5))
+    }
+
+    /// True when every enabled pulse is on beat 0 and all those hits share one audio frame.
+    pub fn coincidence(&self) -> bool {
+        if !self.playing {
+            return false;
+        }
+        let mut frame = None;
+        for pulse in self.pattern.pulses.iter().filter(|p| p.enabled) {
+            match self.lit.get(&pulse.id) {
+                Some(l) if l.beat == 0 && frame.is_none_or(|f| f == l.frame) => {
+                    frame = Some(l.frame);
+                }
+                _ => return false,
+            }
+        }
+        frame.is_some()
+    }
+
+    /// Strongest flash among enabled pulses sitting on beat 0 (0 if none): the
+    /// central glow of the topology.
+    pub fn downbeat_flash(&self) -> f32 {
+        self.pattern
+            .pulses
+            .iter()
+            .filter(|p| p.enabled)
+            .filter_map(|p| self.lit.get(&p.id).filter(|l| l.beat == 0))
+            .map(|l| l.flash.value.clamp(0.0, 1.0))
+            .fold(0.0, f32::max)
+    }
+
     /// True while a beat is waiting to light or a flash is still moving,
     /// so the app keeps repainting.
     pub fn animating(&self) -> bool {
-        !self.pending.is_empty() || self.lit.values().any(|l| !l.flash.settled())
+        !self.pending.is_empty()
+            || self.lit.values().any(|l| !l.flash.settled())
+            || self.dots.values().flatten().any(|s| !s.settled())
     }
 
     /// Unlights everything and drops queued beats (on stop).
     pub fn clear_beats(&mut self) {
         self.pending.clear();
         self.lit.clear();
+        self.dots.clear();
     }
 
     /// Registers a tap at `now`; returns the time since the tap epoch and the

@@ -316,7 +316,14 @@ fn settings_does_not_stretch_neighbors() {
 fn no_overlap_at_minimum_size() {
     let mut h = harness(MIN, many());
     click(&mut h, "Pulso 1: ajustes");
-    let labels = ["BPM", "Tap", "Adicionar pulso", "Play", "Fixar mini"];
+    let labels = [
+        "BPM",
+        "Tap",
+        "Adicionar pulso",
+        "Play",
+        "Fixar mini",
+        "Topologia rítmica",
+    ];
     let rects: Vec<_> = labels
         .iter()
         .map(|l| (l, h.get_by_label(l).rect()))
