@@ -39,6 +39,19 @@ pub struct MusicalPosition {
     pub ticks_per_measure: u64,
 }
 
+impl MusicalPosition {
+    /// The very start of `measure`, before its "one" has played, at any
+    /// sample rate: `ticks_per_measure` is 0. Given to
+    /// [`Timeline::resume`] it plays every pulse's beat 0 at the start frame.
+    pub const fn start_of(measure: u64) -> MusicalPosition {
+        MusicalPosition {
+            measure,
+            ticks: 0,
+            ticks_per_measure: 0,
+        }
+    }
+}
+
 /// Where the tempo comes from. v1 uses the internal BPM; v2 may plug in Link.
 pub trait TempoSource {
     fn bpm(&self) -> Bpm;
@@ -181,8 +194,14 @@ impl Timeline {
     /// the tempo the old stream was playing at that position, and `pattern`
     /// the pattern it was playing. Every pulse is audible from
     /// `start_frame` (a pulse still waiting for its first "one" on the old
-    /// stream starts right away). A zero `ticks_per_measure` means "start of
-    /// `position.measure`".
+    /// stream starts right away).
+    ///
+    /// A `position` with `ticks_per_measure == 0` (see
+    /// [`MusicalPosition::start_of`]) has no phase to convert: it means "the
+    /// start of `position.measure`, nothing played yet". Every pulse plays
+    /// beat 0 at `start_frame` and the grid is then that of
+    /// [`new`](Self::new) at `start_frame`, with the measure count starting
+    /// at `position.measure`; `ticks` is ignored.
     pub fn resume(
         sample_rate: u32,
         bpm: Bpm,
@@ -193,6 +212,7 @@ impl Timeline {
         let mut tl = Self::new(sample_rate, bpm, pattern, start_frame);
         let old_q = i128::from(position.ticks_per_measure);
         if old_q == 0 {
+            // `MusicalPosition::start_of`: the "one" of that measure is due.
             tl.anchor = Anchor::measure_start(start_frame, position.measure);
             return tl;
         }

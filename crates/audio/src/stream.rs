@@ -105,12 +105,8 @@ impl Transport {
         let resume = match (self.playing, snapshot.playing) {
             (false, _) => None,
             (true, true) => Some(snapshot.position),
-            // Zero ticks per measure: the start of measure 0.
-            (true, false) => Some(MusicalPosition {
-                measure: 0,
-                ticks: 0,
-                ticks_per_measure: 0,
-            }),
+            // `Play` not taken yet: start at the one, as `Play` does.
+            (true, false) => Some(MusicalPosition::start_of(0)),
         };
         EngineInit {
             pattern: self.pattern.clone(),
@@ -136,7 +132,9 @@ pub struct AudioService {
 
 /// An open stream and what watches it.
 struct Live {
-    _stream: cpal::Stream,
+    stream: cpal::Stream,
+    /// Tells the data callback to render nothing more (set before a rebuild).
+    halted: Arc<AtomicBool>,
     info: DeviceInfo,
     /// Set by the error callback or the data callback: rebuild.
     failed: Arc<AtomicBool>,
@@ -240,8 +238,21 @@ impl AudioService {
     }
 
     fn rebuild(&mut self, now: Instant) {
-        // Stop the old engine before reading where it is.
-        self.live = None;
+        // Stop the old engine before reading where it is, or the frames it
+        // renders after the snapshot are played again by the new one.
+        // Dropping a cpal 0.18.2 CoreAudio `Stream` is not enough: it holds
+        // an `Arc<Mutex<StreamInner>>` and its `Drop` only signals the
+        // monitor; the AudioUnit is stopped and disposed when the last strong
+        // `Arc` goes. The default-output monitor thread upgrades its weak ref
+        // and holds a strong one while it handles a device change, exactly
+        // when we rebuild. `pause` locks the inner unit and calls the
+        // synchronous `AudioOutputUnitStop`; `halted` also silences the
+        // callback should the stop fail or a callback still slip through.
+        if let Some(live) = self.live.take() {
+            live.halted.store(true, Ordering::Release);
+            let _ = live.stream.pause();
+            drop(live);
+        }
         let mut snapshot = self.handle.position.snapshot();
         if snapshot.frame == 0
             && let Some(origin) = self.origin
@@ -314,6 +325,7 @@ fn open(host: &cpal::Host, init: &EngineInit) -> Result<Option<(Live, EngineHand
     }
     let failed = Arc::new(AtomicBool::new(false));
     let callbacks = Arc::new(AtomicU64::new(0));
+    let halted = Arc::new(AtomicBool::new(false));
     let mut last_error = None;
     for buffer_size in sizes {
         let config = StreamConfig {
@@ -330,6 +342,7 @@ fn open(host: &cpal::Host, init: &EngineInit) -> Result<Option<(Live, EngineHand
             underruns: Arc::clone(&handle.underruns),
             failed: Arc::clone(&failed),
             callbacks: Arc::clone(&callbacks),
+            halted: Arc::clone(&halted),
         };
         let on_error = {
             let underruns = Arc::clone(&handle.underruns);
@@ -359,7 +372,8 @@ fn open(host: &cpal::Host, init: &EngineInit) -> Result<Option<(Live, EngineHand
                     sample_rate,
                 };
                 let live = Live {
-                    _stream: stream,
+                    stream,
+                    halted,
                     info,
                     failed,
                     callbacks,
@@ -386,11 +400,18 @@ struct Callback {
     underruns: Arc<AtomicU64>,
     failed: Arc<AtomicBool>,
     callbacks: Arc<AtomicU64>,
+    /// Set when the service replaces this stream: output silence, render
+    /// nothing, so the engine's position stays where the snapshot read it.
+    halted: Arc<AtomicBool>,
 }
 
 impl Callback {
     /// Renders `data`. Only atomics and the engine: no allocation or lock.
     fn run(&mut self, data: &mut [f32], info: &OutputCallbackInfo) {
+        if self.halted.load(Ordering::Acquire) {
+            data.fill(0.0);
+            return;
+        }
         let ts = info.timestamp();
         let frames = (data.len() / self.channels) as u64;
         if let Some((prev, prev_frames)) = self.last {
@@ -552,11 +573,7 @@ mod tests {
         let init = EngineInit {
             pattern: Pattern::default(),
             bpm: Bpm::new(120),
-            resume: Some(MusicalPosition {
-                measure: 0,
-                ticks: 0,
-                ticks_per_measure: 0,
-            }),
+            resume: Some(MusicalPosition::start_of(0)),
         };
         let (engine, mut handle) = Engine::new(48_000, 2, init);
         let mut cb = Callback {
@@ -567,6 +584,7 @@ mod tests {
             underruns: Arc::clone(&handle.underruns),
             failed: Arc::new(AtomicBool::new(false)),
             callbacks: Arc::new(AtomicU64::new(0)),
+            halted: Arc::new(AtomicBool::new(false)),
         };
         let mut out = [0.0f32; 960];
         let underruns = || handle.underruns.load(Ordering::Relaxed);
@@ -584,5 +602,14 @@ mod tests {
         assert_eq!(cb.callbacks.load(Ordering::Relaxed), 6);
         let events = std::iter::from_fn(|| handle.events.pop().ok()).count();
         assert!(events > 0, "the engine rendered clicks");
+
+        // Halted for a rebuild: silence, and the position does not move.
+        let frame = handle.position.snapshot().frame;
+        cb.halted.store(true, Ordering::Release);
+        out.fill(1.0);
+        assert_no_alloc::assert_no_alloc(|| cb.run(&mut out, &at(1_110)));
+        assert!(out.iter().all(|&x| x == 0.0));
+        assert_eq!(handle.position.snapshot().frame, frame);
+        assert_eq!(cb.callbacks.load(Ordering::Relaxed), 6);
     }
 }

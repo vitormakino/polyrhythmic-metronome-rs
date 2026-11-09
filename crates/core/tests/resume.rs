@@ -124,6 +124,32 @@ fn degenerate_position_starts_at_the_position_measure() {
     assert_eq!(tl.position_at(10).ticks, 0);
 }
 
+/// `MusicalPosition::start_of(m)` is the documented "start at the one" input
+/// of `resume`: every pulse plays beat 0 at `start_frame`, and from there the
+/// grid is a fresh timeline's, whatever the sample rate.
+#[test]
+fn start_of_a_measure_plays_every_one_at_the_start_frame() {
+    let p = pattern_of(&[4, 3, 5]);
+    for sr in [16_000u32, 44_100, 48_000] {
+        let pos = MusicalPosition::start_of(7);
+        assert_eq!(pos.ticks_per_measure, 0);
+        let mut tl = Timeline::resume(sr, Bpm::new(97), &p, pos, 1_000);
+        assert_eq!(tl.position_at(1_000).measure, 7);
+        let mut got = Vec::new();
+        tl.events_in(&p, 1_000, 1_000 + 10 * u64::from(sr), &mut got);
+        let mut want = Vec::new();
+        Timeline::new(sr, Bpm::new(97), &p, 1_000).events_in(
+            &p,
+            1_000,
+            1_000 + 10 * u64::from(sr),
+            &mut want,
+        );
+        assert_eq!(got, want, "sr {sr}");
+        let firsts: Vec<_> = got.iter().take(3).map(|h| (h.frame, h.beat)).collect();
+        assert_eq!(firsts, vec![(1_000, 0); 3], "sr {sr}");
+    }
+}
+
 fn resume_case() -> impl Strategy<Value = (u32, u32, u16, u16, Vec<u32>, u64, Option<i8>)> {
     let rates = vec![
         8_000u32, 16_000, 22_050, 44_100, 48_000, 88_200, 96_000, 192_000,
