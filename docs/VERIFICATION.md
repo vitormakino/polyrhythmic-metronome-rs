@@ -97,10 +97,10 @@ cargo run --release -p polyrhythmic-metronome-app
    playing, plug in wired headphones. Expected: the clicks move to the
    headphones within about 0.5 s (the service ticks 4 times a second from
    a background thread even with no window shown).
-8. **Reopening.** Click the Dock icon. Expected for now: the window does
-   **not** come back. eframe 0.37 / winit 0.30 give no hook for the macOS
-   "reopen" event, so a hidden window can only be shown again from the menu
-   bar item that Task 14 adds. Until then, quit and relaunch.
+8. **Reopening.** Click the Dock icon. Expected: the window does **not**
+   come back. eframe 0.37 / winit 0.30 give no hook for the macOS "reopen"
+   event, so a hidden window is shown again from the menu bar item ("Abrir
+   janela" or "Mini", Task 14) or with ⌃⌥M.
 9. **Quit and restore.** Edit the pattern (add a pulse, change beats, a
    sound, BPM 150), pick mini or full, then press ⌘Q (click the Dock icon
    first if no window is shown, so the app is active). Expected: the app
@@ -110,5 +110,88 @@ cargo run --release -p polyrhythmic-metronome-app
     "sem saída de áudio" with a red dot, and the app keeps running. Audio
     underruns, if any, show in the footer as "Falhas de áudio: n", also with
     a red dot.
+
+Record the result here: date, macOS version, what differed.
+
+## Task 14: menu bar & hotkeys
+
+### Blinking the menu bar icon on the "one": measured, not shipped
+
+Status: PASS (2026-11-09, an Apple Silicon Mac, output
+a USB audio interface). Decision: **static icon**.
+
+Rule from the plan: blink only if the icon updates cost less than 1% CPU.
+Measured with a temporary build (not committed) that started playing at
+300 BPM (4 against 3, so a "one" every 0.8 s) with the window hidden,
+blinking for 100 ms on each "one", versus the same build with the blink off.
+CPU time from `ps -o time=` over 10 s, after 4 s of warm-up, three
+alternating runs each:
+
+| run | app, blinking | app, static | ControlCenter, blinking | ControlCenter, static | WindowServer, blinking | WindowServer, static |
+|-----|---------------|-------------|-------------------------|-----------------------|------------------------|----------------------|
+| 1   | 1.9%          | 1.1%        | 0.2%                    | 0.0%                  | 1.8%                   | 2.0%                 |
+| 2   | 3.4%          | 2.4%        | 0.4%                    | 0.1%                  | 4.5%                   | 4.2%                 |
+| 3   | 2.6%          | 1.2%        | 0.6%                    | 0.1%                  | 3.0%                   | 2.1%                 |
+
+The blink costs about 1.1% in the app (0.8 to 1.4 points: each change
+re-encodes the icon in `tray-icon` and the extra wake-ups run `App::logic`)
+plus about 0.3% in ControlCenter, which draws the menu bar extras on macOS
+26. WindowServer is within noise. Over 1%, so the icon stays static.
+
+Also seen: with the window hidden, eframe wakes the app at most every
+100 ms, so a blink would land up to about 100 ms after the click (bar
+intervals between blinks measured 0.73 to 0.88 s for 0.8 s bars).
+
+### Menu bar item and global hotkeys
+
+Status: PENDING (owner). The agent only checked that the release build
+creates the menu bar item (an `NSStatusItem`, visible, 38 px wide in the
+menu bar) and that nothing is printed on stderr (no hotkey refused). It
+could not click the menu, press the hotkeys, or listen.
+
+```
+cargo run --release -p polyrhythmic-metronome-app
+```
+
+The hotkeys are ⌃⌥Space (play/stop), ⌃⌥T (tap) and ⌃⌥M (full ⇄ mini). If
+another app already holds one, the terminal shows
+`hotkey ... unavailable` and the other two still work.
+
+1. **Menu bar item.** Expected: a ring-with-pendulum icon in the menu bar,
+   drawn in the menu bar's colour (dark on a light menu bar, light on a
+   dark one). Click it. Expected menu: "Play", "BPM +1", "BPM −1",
+   "Abrir janela", "Mini", "Sair".
+2. **Play from the menu.** Choose "Play". Expected: clicks start, and the
+   first item now reads "Stop". Click PLAY/STOP in the window: the menu
+   item follows ("Play" again after stopping).
+3. **Background.** While playing, close the window (red button). Open
+   Safari (or any app) and click into it so it has the focus.
+4. **Hotkey play/stop.** With Safari focused, press ⌃⌥Space. Expected:
+   the clicks stop. Press it again: they start. Safari
+   keeps the focus and receives no space character.
+5. **BPM from the menu.** With the window still hidden, choose "BPM +1"
+   ten times. Expected: the tempo is audibly a little faster (130 BPM).
+   "BPM −1" ten times brings it back. At 300 or 40 BPM nothing changes.
+6. **Hotkey tap.** With Safari focused, press ⌃⌥T four times at a steady
+   pace (for example in time with a 100 BPM song). Expected: the clicks
+   follow the tapped tempo.
+7. **Abrir janela.** Choose "Abrir janela". Expected: the full window
+   comes back in front, focused, at its previous place, showing the
+   current BPM (the one set in steps 5 and 6); while playing, no burst of
+   old flashes, the lights just carry on in time.
+8. **Mini.** Close the window again, then choose "Mini". Expected: the
+   mini card comes back on top of Safari, without taking the focus from
+   Safari. "Abrir janela" from mini switches to the full window.
+9. **Hotkey mini.** With Safari focused, press ⌃⌥M. Expected: full ⇄
+   mini each time; if the window was closed, it comes back (mini without
+   focus, full with focus). A minimized window (yellow button) also comes
+   back from the menu or ⌃⌥M.
+10. **Sair.** Change the BPM, then choose "Sair" (also with the window
+    hidden). Expected: the app quits (menu bar icon gone, no sound).
+    Relaunch. Expected: the BPM and pattern you left.
+11. **Hidden tick.** While the window is hidden and playing, plug in wired
+    headphones. Expected: the sound moves within about 0.5 s (the service
+    is now ticked on every ticker wake-up, 4 times a second, even when a
+    wake-up comes a little early).
 
 Record the result here: date, macOS version, what differed.

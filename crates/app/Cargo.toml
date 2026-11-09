@@ -22,3 +22,5 @@ eframe.workspace = true
 serde.workspace = true
 toml.workspace = true
 dirs.workspace = true
+tray-icon.workspace = true
+global-hotkey.workspace = true

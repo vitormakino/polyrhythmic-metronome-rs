@@ -1,8 +1,8 @@
 //! Turns what the views ask for ([`UiAction`]) into engine [`Command`]s.
 //!
 //! Every play/stop goes through [`Controller::set_playing`] whatever its
-//! source (the full or mini window's button today, the menu bar item and the
-//! global hotkey later), so the lit beats are always cleared on a transport
+//! source (the full or mini window's button, the menu bar item, the global
+//! hotkey: all as [`UiAction::TogglePlay`]), so the lit beats are always cleared on a transport
 //! change. Commands go through [`Audio::send`] (`AudioService::send`, R10) and
 //! wait in order in an outbox when the engine's queue is full.
 
@@ -81,12 +81,6 @@ impl Controller {
         self.push(audio, Outgoing::Command(command));
     }
 
-    /// Play if stopped, stop if playing (menu bar item, hotkey).
-    #[allow(dead_code)] // Callers arrive in Task 14 (menu bar item, global hotkey).
-    pub fn toggle_playing(&mut self, audio: &mut impl Audio) {
-        self.set_playing(audio, !self.ui.playing);
-    }
-
     /// Sends what is waiting, in order, until the engine's queue is full.
     pub fn flush(&mut self, audio: &mut impl Audio) {
         while let Some(next) = self.outbox.pop_front() {
@@ -132,6 +126,7 @@ mod tests {
     use pm_core::{Bpm, Pattern, SampleBank};
 
     use super::*;
+    use crate::remote::{self, Remote};
 
     /// Records what was sent; refuses everything while `full`.
     #[derive(Default)]
@@ -200,8 +195,10 @@ mod tests {
     fn stop_from_any_source_clears_lit_beats() {
         let (mut c, mut audio) = lit();
         let pulse = c.ui.pattern.pulses[0].id;
-        // Not through a view's button: e.g. the menu bar item.
-        c.toggle_playing(&mut audio);
+        // Not through a view's button: the menu bar item or the hotkey.
+        for action in remote::view_actions(&mut c.ui, Remote::TogglePlay, Instant::now()) {
+            c.apply(&mut audio, action);
+        }
         assert!(!c.ui.playing);
         assert_eq!(c.ui.active_beat(pulse), None);
         assert_eq!(c.ui.pending_beats(), 0);

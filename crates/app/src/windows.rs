@@ -26,6 +26,8 @@ pub struct Windows {
     pub mini_rect: Option<[f32; 4]>,
     /// After a switch: the size asked for and until when to wait for it.
     settling: Option<(Vec2, Instant)>,
+    /// Hidden with the close button.
+    hidden: bool,
 }
 
 fn min_size(mode: WindowMode) -> Vec2 {
@@ -60,6 +62,7 @@ impl Windows {
             full_rect,
             mini_rect,
             settling: None,
+            hidden: false,
         }
     }
 
@@ -160,12 +163,32 @@ impl Windows {
     }
 
     /// The close button: keep running in the background with the window
-    /// hidden. (Quitting is ⌘Q, or the menu bar's "Sair" from Task 14.)
-    pub fn hide() -> Vec<ViewportCommand> {
+    /// hidden. (Quitting is ⌘Q, or the menu bar's "Sair".)
+    pub fn hide(&mut self) -> Vec<ViewportCommand> {
+        self.hidden = true;
         vec![
             ViewportCommand::CancelClose,
             ViewportCommand::Visible(false),
         ]
+    }
+
+    /// Whether the window is hidden (closed to the background).
+    pub fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    /// Brings the window back, from hidden or minimized; with `focus` the
+    /// app is also activated and the window made key.
+    pub fn show(&mut self, focus: bool) -> Vec<ViewportCommand> {
+        self.hidden = false;
+        let mut commands = vec![
+            ViewportCommand::Visible(true),
+            ViewportCommand::Minimized(false),
+        ];
+        if focus {
+            commands.push(ViewportCommand::Focus);
+        }
+        commands
     }
 }
 
@@ -301,12 +324,32 @@ mod tests {
 
     #[test]
     fn close_hides_instead_of_quitting() {
+        let mut w = Windows::new(WindowMode::Full, None, None);
+        assert!(!w.hidden());
         assert_eq!(
-            Windows::hide(),
+            w.hide(),
             [
                 ViewportCommand::CancelClose,
                 ViewportCommand::Visible(false)
             ]
         );
+        assert!(w.hidden());
+    }
+
+    #[test]
+    fn show_brings_a_hidden_or_minimized_window_back() {
+        let mut w = Windows::new(WindowMode::Full, None, None);
+        w.hide();
+        assert_eq!(
+            w.show(true),
+            [
+                ViewportCommand::Visible(true),
+                ViewportCommand::Minimized(false),
+                ViewportCommand::Focus
+            ]
+        );
+        assert!(!w.hidden());
+        // Mini floats on top without taking the focus from the app in use.
+        assert!(!w.show(false).contains(&ViewportCommand::Focus));
     }
 }

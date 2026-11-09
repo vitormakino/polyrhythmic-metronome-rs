@@ -7,14 +7,23 @@
 //! hidden (eframe then runs only `logic`, no egui pass): the service is
 //! ticked (device following, garbage), beat events are drained and the
 //! settings saved even in the background.
+//!
+//! The menu bar item and the global hotkeys are set up on the first `logic`
+//! call (macOS wants them on the main thread with the event loop running);
+//! their events come through a channel as [`Remote`]s, drained in `logic`,
+//! so they work while the window is hidden.
 
 mod controller;
+mod hotkeys;
+mod remote;
 mod settings;
+mod tray;
 mod windows;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Sense, ViewportCommand};
@@ -25,11 +34,16 @@ use pm_ui::views::footer::MAX_VISUAL_OFFSET_MS;
 use pm_ui::views::{full::full_view, mini::mini_view};
 
 use controller::Controller;
+use remote::Remote;
 use settings::Settings;
+use tray::Tray;
 use windows::Windows;
 
 /// How often the audio service is ticked (and the hidden app woken).
 const TICK: Duration = Duration::from_millis(250);
+/// A tick is due this much before [`TICK`] has passed: the ticker sleeps
+/// exactly `TICK`, so without slack a wake-up a hair early skips a tick.
+const TICK_SLACK: Duration = Duration::from_millis(50);
 /// Settings are written this long after the last change.
 const SAVE_DELAY: Duration = Duration::from_secs(1);
 
@@ -47,11 +61,21 @@ struct App {
     pending: (Settings, Instant),
     last_tick: Instant,
     last_frame: Instant,
+    /// Menu bar item and hotkeys: built on the first `logic` call, kept
+    /// alive here (dropping them removes them).
+    started: bool,
+    tray: Option<Tray>,
+    _hotkeys: Option<global_hotkey::GlobalHotKeyManager>,
+    remote_tx: Sender<Remote>,
+    remote_rx: Receiver<Remote>,
+    /// "Sair" was chosen: let the next close request through.
+    quitting: bool,
 }
 
 impl App {
     fn new(audio: AudioService, settings: Settings, settings_dir: Option<PathBuf>) -> App {
         let now = Instant::now();
+        let (remote_tx, remote_rx) = mpsc::channel();
         let mut ui = UiState::default();
         ui.pattern = settings.pattern.clone();
         ui.bpm = settings.bpm;
@@ -67,6 +91,12 @@ impl App {
             pending: (settings, now),
             last_tick: now,
             last_frame: now,
+            started: false,
+            tray: None,
+            _hotkeys: None,
+            remote_tx,
+            remote_rx,
+            quitting: false,
         };
         app.sync_device();
         app
@@ -119,6 +149,55 @@ impl App {
         self.saved = current;
     }
 
+    /// Builds the menu bar item and registers the hotkeys. Either may fail
+    /// (reported on stderr); the app runs on without it.
+    fn start_remotes(&mut self, ctx: &egui::Context) {
+        tray::forward(self.remote_tx.clone(), ctx.clone());
+        hotkeys::forward(self.remote_tx.clone(), ctx.clone());
+        match Tray::build(self.ctl.ui.playing) {
+            Ok(tray) => self.tray = Some(tray),
+            Err(e) => eprintln!("polyrhythmic-metronome: no menu bar item: {e}"),
+        }
+        match hotkeys::register_hotkeys() {
+            Ok(manager) => self._hotkeys = Some(manager),
+            Err(e) => eprintln!("polyrhythmic-metronome: no global hotkeys: {e}"),
+        }
+    }
+
+    /// A request from the menu bar item or a hotkey: window ones here, the
+    /// others through the views' actions.
+    fn remote(&mut self, ctx: &egui::Context, remote: Remote, now: Instant) {
+        if remote == Remote::Quit {
+            self.save();
+            self.quitting = true;
+            ctx.send_viewport_cmd(ViewportCommand::Close);
+            ctx.request_repaint();
+        } else if let Some(mode) = remote::target_mode(remote, self.windows.mode()) {
+            self.show(ctx, mode, now);
+        } else {
+            for action in remote::view_actions(&mut self.ctl.ui, remote, now) {
+                self.handle(ctx, action, now);
+            }
+        }
+    }
+
+    /// Shows the window in `mode`. The full window also takes focus; the
+    /// mini one floats on top without taking it from the app in use.
+    fn show(&mut self, ctx: &egui::Context, mode: WindowMode, now: Instant) {
+        if self.windows.hidden() {
+            // Nothing lit from before it was hidden flashes at once.
+            self.ctl.ui.clear_beats();
+        }
+        for command in self.windows.show(mode == WindowMode::Full) {
+            ctx.send_viewport_cmd(command);
+        }
+        if mode != self.ctl.ui.mode {
+            self.ctl.ui.mode = mode;
+            self.handle(ctx, UiAction::ToggleMini, now);
+        }
+        ctx.request_repaint();
+    }
+
     fn handle(&mut self, ctx: &egui::Context, action: UiAction, now: Instant) {
         match action {
             UiAction::ToggleMini => {
@@ -144,8 +223,11 @@ impl eframe::App for App {
     /// wake-up of the tick thread.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Instant::now();
-        if now - self.last_tick >= TICK {
-            self.last_tick = now;
+        if !self.started {
+            self.started = true;
+            self.start_remotes(ctx);
+        }
+        if tick_due(&mut self.last_tick, now) {
             self.audio.tick();
             self.sync_device();
         }
@@ -153,13 +235,23 @@ impl eframe::App for App {
         // A parked SetPattern holds back every later command (Task 7).
         while handle.garbage.pop().is_ok() {}
         while let Ok(event) = handle.events.pop() {
-            self.ctl.ui.on_beat(&event);
+            // Nothing advances while hidden: keep no backlog.
+            if !self.windows.hidden() {
+                self.ctl.ui.on_beat(&event);
+            }
         }
         self.ctl.ui.underruns = handle.underruns.load(Ordering::Relaxed);
+        let remotes: Vec<Remote> = self.remote_rx.try_iter().collect();
+        for remote in remotes {
+            self.remote(ctx, remote, now);
+        }
         self.ctl.flush(&mut self.audio);
+        if let Some(tray) = &mut self.tray {
+            tray.set_playing(self.ctl.ui.playing);
+        }
 
-        if ctx.input(|i| i.viewport().close_requested()) {
-            for command in Windows::hide() {
+        if !self.quitting && ctx.input(|i| i.viewport().close_requested()) {
+            for command in self.windows.hide() {
                 ctx.send_viewport_cmd(command);
             }
         }
@@ -218,6 +310,16 @@ fn visual_offset_for(device: &DeviceInfo, saved: &BTreeMap<String, u32>) -> Dura
     }
 }
 
+/// Whether the audio service is due a tick at `now`; if so `last` moves to `now`.
+fn tick_due(last: &mut Instant, now: Instant) -> bool {
+    if now.saturating_duration_since(*last) + TICK_SLACK >= TICK {
+        *last = now;
+        true
+    } else {
+        false
+    }
+}
+
 /// Wakes the app every [`TICK`] even while its window is hidden.
 fn spawn_ticker(ctx: egui::Context) {
     let spawned = std::thread::Builder::new()
@@ -269,6 +371,29 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_ticker_wake_ups_each_tick() {
+        let start = Instant::now();
+        // The ticker sleeps TICK (250 ms) and wakes up a bit early or late.
+        for every_ms in [249, 250, 253, 270] {
+            let mut last = start;
+            let ticks = (1..=40)
+                .filter(|&k| tick_due(&mut last, start + Duration::from_millis(every_ms * k)))
+                .count();
+            assert_eq!(ticks, 40, "woken every {every_ms} ms");
+        }
+    }
+
+    #[test]
+    fn frames_do_not_tick_more_than_about_four_times_a_second() {
+        let start = Instant::now();
+        let mut last = start;
+        let ticks = (1..=60)
+            .filter(|&k| tick_due(&mut last, start + Duration::from_millis(1000 * k / 60)))
+            .count();
+        assert!((4..=5).contains(&ticks), "{ticks} ticks in 1 s at 60 fps");
+    }
 
     #[test]
     fn visual_offset_is_saved_per_device_else_reported_latency() {

@@ -223,11 +223,15 @@ impl UiState {
         self.dots.clear();
     }
 
-    /// Registers a tap at `now`; returns the time since the tap epoch and the
-    /// tempo the taps give, if any.
-    pub(crate) fn tap(&mut self, now: Instant) -> (Duration, Option<Bpm>) {
+    /// A tap at `now` (the TAP button, the global hotkey): pushes `Tap` and,
+    /// when the taps give a tempo, applies it and pushes `SetBpm`.
+    pub fn tap(&mut self, now: Instant, actions: &mut Vec<UiAction>) {
         let at = now.saturating_duration_since(self.tap_epoch);
-        (at, self.tap.tap(at))
+        actions.push(UiAction::Tap(at));
+        if let Some(bpm) = self.tap.tap(at) {
+            self.bpm = bpm;
+            actions.push(UiAction::SetBpm(bpm));
+        }
     }
 
     /// Whether the settings panel of `pulse` is open.

@@ -68,12 +68,7 @@ pub(crate) fn bpm_card(
         1.0,
     );
     if tap.clicked() {
-        let (at, bpm) = state.tap(now);
-        actions.push(UiAction::Tap(at));
-        if let Some(bpm) = bpm {
-            state.bpm = bpm;
-            actions.push(UiAction::SetBpm(bpm));
-        }
+        state.tap(now, actions);
     }
     let pin_rect = Rect::from_center_size(
         pos2(tap_rect.left() - 8.0 - 13.0, header_y),
