@@ -12,3 +12,9 @@ name = "pm_ui"
 
 [lints]
 workspace = true
+
+[dependencies]
+egui.workspace = true
+
+[dev-dependencies]
+egui_kittest.workspace = true
