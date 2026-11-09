@@ -10,6 +10,18 @@ use egui::{
     Stroke, Ui, Vec2, WidgetInfo,
 };
 
+/// zinc-300, text on idle pill buttons.
+pub(crate) const TEXT_SOFT: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd8);
+/// zinc-200, hovered icons.
+pub(crate) const TEXT_HOT: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
+/// Between zinc-800 and zinc-700 (Tailwind's `zinc-750` in the web app).
+pub(crate) const HOVER_FILL: Color32 = Color32::from_rgb(0x2f, 0x2f, 0x33);
+
+/// `idle` normally, brighter while hovered.
+pub(crate) fn idle_color(resp: &Response, idle: Color32) -> Color32 {
+    if resp.hovered() { TEXT_HOT } else { idle }
+}
+
 /// A button at `rect` named `label`. Disabled buttons keep their node (marked
 /// disabled) but ignore clicks.
 pub(crate) fn button(ui: &Ui, rect: Rect, id: Id, label: &str, enabled: bool) -> Response {

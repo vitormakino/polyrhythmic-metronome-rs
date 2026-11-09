@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::spring::Spring;
 
+/// Most beats queued for [`UiState::advance`]; older ones are dropped
+/// (e.g. while the window is hidden and nothing advances).
+pub const PENDING_BEATS_CAP: usize = 256;
+
 /// Which window the app shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WindowMode {
@@ -76,7 +80,7 @@ impl Default for UiState {
             device_name: None,
             tap: TapTempo::default(),
             tap_epoch: Instant::now(),
-            pending: VecDeque::new(),
+            pending: VecDeque::with_capacity(PENDING_BEATS_CAP),
             lit: HashMap::new(),
             settings_open: HashSet::new(),
             dragging: None,
@@ -86,7 +90,15 @@ impl Default for UiState {
 
 impl UiState {
     /// Queues a beat from the engine; it lights in [`Self::advance`] once its time comes.
+    /// Ignored while stopped, so beats still in flight after Stop never light.
+    /// At most [`PENDING_BEATS_CAP`] beats wait; the oldest is dropped first.
     pub fn on_beat(&mut self, ev: &BeatEvent) {
+        if !self.playing {
+            return;
+        }
+        if self.pending.len() == PENDING_BEATS_CAP {
+            self.pending.pop_front();
+        }
         self.pending.push_back(*ev);
     }
 
@@ -132,6 +144,11 @@ impl UiState {
         self.lit
             .get(&pulse)
             .map_or(0.0, |l| l.flash.value.clamp(0.0, 1.0))
+    }
+
+    /// Beats queued and not yet lit.
+    pub fn pending_beats(&self) -> usize {
+        self.pending.len()
     }
 
     /// True while a beat is waiting to light or a flash is still moving,

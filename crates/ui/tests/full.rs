@@ -5,7 +5,7 @@ use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use egui_kittest::{Harness, SnapshotOptions, wgpu::WgpuTestRenderer};
 use pm_audio::BeatEvent;
 use pm_core::{Intensity, MAX_PULSES, Pattern, SoundType};
-use pm_ui::state::{UiAction, UiState};
+use pm_ui::state::{PENDING_BEATS_CAP, UiAction, UiState};
 use pm_ui::theme;
 use pm_ui::views::full::full_view;
 
@@ -235,6 +235,7 @@ fn drag_reorders_pulses() {
 #[test]
 fn visual_waits_for_offset() {
     let mut state = UiState::default();
+    state.playing = true;
     state.visual_offset = Duration::from_millis(200);
     let pulse = state.pattern.pulses[0].id;
     let t0 = Instant::now();
@@ -248,6 +249,44 @@ fn visual_waits_for_offset() {
     assert_eq!(state.active_beat(pulse), None);
     state.advance(t0 + Duration::from_millis(210), 0.016);
     assert_eq!(state.active_beat(pulse), Some(0));
+}
+
+#[test]
+fn queued_beats_are_bounded_and_keep_the_newest() {
+    let mut state = UiState::default();
+    state.playing = true;
+    let pulse = state.pattern.pulses[0].id;
+    let t0 = Instant::now();
+    let total = PENDING_BEATS_CAP as u64 * 4;
+    // A hidden window: the app keeps forwarding beats but never advances.
+    for i in 0..total {
+        state.on_beat(&BeatEvent {
+            pulse,
+            beat: i as u32,
+            frame: i,
+            at: t0 + Duration::from_millis(i),
+        });
+    }
+    assert_eq!(state.pending_beats(), PENDING_BEATS_CAP);
+    state.advance(t0 + Duration::from_secs(3600), 0.016);
+    assert_eq!(state.pending_beats(), 0);
+    assert_eq!(state.active_beat(pulse), Some(total as u32 - 1));
+}
+
+#[test]
+fn beats_are_ignored_while_stopped() {
+    let mut state = UiState::default();
+    let pulse = state.pattern.pulses[0].id;
+    let t0 = Instant::now();
+    state.on_beat(&BeatEvent {
+        pulse,
+        beat: 1,
+        frame: 0,
+        at: t0,
+    });
+    state.advance(t0 + Duration::from_millis(10), 0.016);
+    assert_eq!(state.active_beat(pulse), None);
+    assert_eq!(state.pending_beats(), 0);
 }
 
 #[test]
