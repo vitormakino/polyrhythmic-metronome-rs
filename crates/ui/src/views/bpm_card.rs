@@ -5,8 +5,8 @@ use std::time::Instant;
 
 use egui::style::HandleShape;
 use egui::{
-    Align2, Color32, CornerRadius, Rect, Slider, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2,
-    vec2,
+    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Role, Sense, Slider, Stroke, StrokeKind, Ui,
+    UiBuilder, Vec2, WidgetInfo, pos2, vec2,
 };
 use pm_core::Bpm;
 
@@ -30,6 +30,8 @@ pub(crate) fn bpm_card(
     theme::paint_top_accent(&painter, rect);
     let pad = if wide { 24.0 } else { 16.0 };
     let inner = rect.shrink2(vec2(pad, if wide { 20.0 } else { 14.0 }));
+
+    let slider_h = 20.0;
 
     // Header: caption left, mini window and TAP right.
     let header_y = inner.top() + 12.0;
@@ -102,48 +104,19 @@ pub(crate) fn bpm_card(
     }
 
     // Big number between - and +.
-    let slider_h = 20.0;
     let number_area = Rect::from_min_max(
         pos2(inner.left(), header_y + 12.0),
         pos2(inner.right(), inner.bottom() - slider_h - 4.0),
     );
     let font = theme::font_light(if wide { 72.0 } else { 56.0 });
-    let digits = widgets::text_width(&painter, "300", font.clone(), -2.0);
-    let center = number_area.center();
-    widgets::text(
-        &painter,
-        center,
-        Align2::CENTER_CENTER,
-        &state.bpm.get().to_string(),
+    bpm_stepper(
+        ui,
+        number_area.center(),
         font,
-        Color32::WHITE,
-        -2.0,
+        if wide { 48.0 } else { 40.0 },
+        state,
+        actions,
     );
-    let step = if wide { 48.0 } else { 40.0 };
-    let offset = digits / 2.0 + 24.0 + step / 2.0;
-    for (label, delta) in [("Diminuir BPM", -1), ("Aumentar BPM", 1)] {
-        let c = center + vec2(offset * delta as f32, 0.0);
-        let r = Rect::from_center_size(c, Vec2::splat(step));
-        let resp = widgets::button(ui, r, ui.make_persistent_id(label), label, true);
-        if resp.hovered() {
-            painter.circle_filled(c, step / 2.0, theme::BORDER);
-        }
-        let at_limit = (delta < 0 && state.bpm.get() == Bpm::MIN)
-            || (delta > 0 && state.bpm.get() == Bpm::MAX);
-        let color = if at_limit {
-            theme::DOT_INACTIVE
-        } else {
-            widgets::idle_color(&resp, theme::TEXT_DIM)
-        };
-        if delta < 0 {
-            widgets::minus(&painter, c, 24.0, color);
-        } else {
-            widgets::plus(&painter, c, 24.0, color);
-        }
-        if resp.clicked() {
-            set_bpm(state, i32::from(state.bpm.get()) + delta, actions);
-        }
-    }
 
     // Slider along the bottom.
     let slider_rect = Rect::from_min_max(
@@ -170,7 +143,110 @@ pub(crate) fn bpm_card(
     }
 }
 
-fn set_bpm(state: &mut UiState, value: i32, actions: &mut Vec<UiAction>) {
+/// The big BPM number centred on `center` with a round "-" and "+" button on
+/// either side (`step` pt wide). Returns the number's rect. Shared by the tempo
+/// card and the mini view.
+pub(super) fn bpm_stepper(
+    ui: &mut Ui,
+    center: Pos2,
+    font: FontId,
+    step: f32,
+    state: &mut UiState,
+    actions: &mut Vec<UiAction>,
+) -> Rect {
+    let painter = ui.painter().clone();
+    let digits = widgets::text_width(&painter, "300", font.clone(), -2.0);
+    widgets::text(
+        &painter,
+        center,
+        Align2::CENTER_CENTER,
+        &state.bpm.get().to_string(),
+        font.clone(),
+        Color32::WHITE,
+        -2.0,
+    );
+    let gap = (step * 0.5).min(24.0);
+    let offset = digits / 2.0 + gap + step / 2.0;
+    let icon = (step * 0.6).min(24.0);
+    for (label, delta) in [("Diminuir BPM", -1), ("Aumentar BPM", 1)] {
+        let c = center + vec2(offset * delta as f32, 0.0);
+        let r = Rect::from_center_size(c, Vec2::splat(step));
+        let resp = widgets::button(ui, r, ui.make_persistent_id(label), label, true);
+        if resp.hovered() {
+            painter.circle_filled(c, step / 2.0, theme::BORDER);
+        }
+        let at_limit = (delta < 0 && state.bpm.get() == Bpm::MIN)
+            || (delta > 0 && state.bpm.get() == Bpm::MAX);
+        let color = if at_limit {
+            theme::DOT_INACTIVE
+        } else {
+            widgets::idle_color(&resp, theme::TEXT_DIM)
+        };
+        if delta < 0 {
+            widgets::minus(&painter, c, icon, color);
+        } else {
+            widgets::plus(&painter, c, icon, color);
+        }
+        if resp.clicked() {
+            set_bpm(state, i32::from(state.bpm.get()) + delta, actions);
+        }
+    }
+    Rect::from_center_size(center, vec2(digits, font.size * 1.1))
+}
+
+/// Points of mouse-wheel / trackpad scroll that make one BPM step.
+fn scroll_notch(ui: &Ui) -> f32 {
+    ui.ctx().options(|o| o.input_options.line_scroll_speed)
+}
+
+/// Vertical drag distance (pt) per BPM step.
+const DRAG_STEP: f32 = 4.0;
+
+/// Scroll over / vertical drag on the BPM number: one wheel notch is +-1,
+/// dragging up raises by 1 per [`DRAG_STEP`] px. The sub-step remainder is
+/// kept between frames so slow gestures still add up.
+pub(super) fn bpm_gestures(
+    ui: &mut Ui,
+    rect: Rect,
+    state: &mut UiState,
+    actions: &mut Vec<UiAction>,
+) {
+    let id = ui.make_persistent_id("bpm-gestures");
+    let resp = ui.interact(rect, id, Sense::click_and_drag());
+    resp.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, "BPM"));
+    let resp = resp.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+
+    let scroll = if resp.hovered() {
+        ui.input(|i| i.smooth_scroll_delta.y)
+    } else {
+        0.0
+    };
+    let drag = if resp.dragged() {
+        -resp.drag_delta().y
+    } else {
+        0.0
+    };
+    let acc_id = id.with("acc");
+    let (mut scroll_acc, mut drag_acc): (f32, f32) =
+        ui.data(|d| d.get_temp(acc_id)).unwrap_or((0.0, 0.0));
+    if !resp.hovered() && !resp.dragged() {
+        (scroll_acc, drag_acc) = (0.0, 0.0);
+    }
+    scroll_acc += scroll;
+    drag_acc += drag;
+    let notch = scroll_notch(ui);
+    let scroll_steps = (scroll_acc / notch).trunc();
+    let drag_steps = (drag_acc / DRAG_STEP).trunc();
+    scroll_acc -= scroll_steps * notch;
+    drag_acc -= drag_steps * DRAG_STEP;
+    ui.data_mut(|d| d.insert_temp(acc_id, (scroll_acc, drag_acc)));
+    let steps = (scroll_steps + drag_steps) as i32;
+    if steps != 0 {
+        set_bpm(state, i32::from(state.bpm.get()) + steps, actions);
+    }
+}
+
+pub(super) fn set_bpm(state: &mut UiState, value: i32, actions: &mut Vec<UiAction>) {
     let bpm = Bpm::new(value);
     if bpm != state.bpm {
         state.bpm = bpm;

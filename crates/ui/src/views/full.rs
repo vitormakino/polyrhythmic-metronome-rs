@@ -272,7 +272,14 @@ fn pulses_header(ui: &Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiA
     }
 }
 
-fn play_button(ui: &Ui, rect: Rect, state: &mut UiState, wide: bool, actions: &mut Vec<UiAction>) {
+/// The Play/Stop button (also used by the mini view).
+pub(super) fn play_button(
+    ui: &Ui,
+    rect: Rect,
+    state: &mut UiState,
+    wide: bool,
+    actions: &mut Vec<UiAction>,
+) {
     let label = if state.playing { "Stop" } else { "Play" };
     let resp = widgets::button(ui, rect, ui.make_persistent_id("play"), label, true);
     let shape = if resp.is_pointer_button_down_on() {
