@@ -38,6 +38,7 @@ const HOLD_SLOTS: usize = 8;
 const KNEE: f32 = 0.8;
 
 /// What the engine is started with.
+#[derive(Clone, Debug)]
 pub struct EngineInit {
     pub pattern: Pattern,
     pub bpm: Bpm,
@@ -54,6 +55,12 @@ pub struct EngineHandle {
     pub commands: Producer<Command>,
     pub events: Consumer<BeatEvent>,
     /// Replaced patterns, to be dropped here rather than on the audio thread.
+    ///
+    /// Drain it every UI frame (or let [`AudioService::tick`] do it): the
+    /// engine parks a `SetPattern` while its retire slots are full, and every
+    /// command queued after it, including `Stop`, waits behind it.
+    ///
+    /// [`AudioService::tick`]: crate::AudioService::tick
     pub garbage: Consumer<Box<PatternUpdate>>,
     pub position: PositionReader,
     /// Output underruns, counted by the stream that drives the engine.
