@@ -7,6 +7,12 @@
 //! `(anchor_frame, anchor_measure, anchor_ticks)` with `i128` integer math,
 //! so no error can accumulate however long the session runs. There are no
 //! floats here except the hit gain.
+//!
+//! Live edits re-anchor. The phase is carried over exactly, and so is the set
+//! of beats already emitted: the anchor remembers the phase up to which every
+//! beat has been played (`done`), so a beat the old timeline would have fired
+//! at the edit frame itself is never lost, and one already fired is never
+//! repeated.
 
 use crate::model::{Bpm, Intensity, Pattern, PulseId, SoundType};
 
@@ -44,6 +50,16 @@ impl TempoSource for Bpm {
     }
 }
 
+/// How a pattern edit takes effect (see [`Timeline::apply_pattern`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApplyMode {
+    /// The new pattern applies from the edit frame on.
+    Now,
+    /// The reference cycle changed: keep rendering the old pattern for frames
+    /// before this one, the new pattern from it on. It is the next "one".
+    AtNextOne(u64),
+}
+
 /// The point the whole timeline is computed from: at `frame`, the music is
 /// `ticks` (in `0..Q`) into measure `measure`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +67,36 @@ struct Anchor {
     frame: u64,
     measure: u64,
     ticks: u64,
+    /// Every beat whose target, in ticks from the start of `measure`, is
+    /// `<= done_num / done_den` has been emitted; the others have not. Beat
+    /// targets `idx·Q/n` are rational, hence the strict bound. It is `ticks`
+    /// minus less than one frame of phase (it may be negative), so at most
+    /// one beat per pulse lies in `(done, ticks]`; that beat fires at
+    /// `frame`. The denominator is 1 except after a sample-rate rebase.
+    done_num: i128,
+    done_den: i128,
+}
+
+impl Anchor {
+    /// Measure `measure` starts exactly at `frame`, nothing emitted yet.
+    fn measure_start(frame: u64, measure: u64) -> Anchor {
+        Anchor {
+            frame,
+            measure,
+            ticks: 0,
+            // Any value in (-Q/n, 0): the beat at tick 0 is still to come.
+            done_num: -1,
+            done_den: 1,
+        }
+    }
+}
+
+/// A reference-cycle change waiting for measure `measure` to start.
+#[derive(Clone, Copy, Debug)]
+struct Switch {
+    measure: u64,
+    /// New reference beat count `R`.
+    reference: u64,
 }
 
 /// Per-pulse "next beat" cursor. It is only a cache: `events_in` checks it
@@ -80,13 +126,23 @@ impl Cursor {
 
 /// Hit schedule for a pattern, computed from an anchor
 /// `(frame, measure, ticks)` point and the current BPM. Live edits (tempo,
-/// pattern, sample rate) are meant to re-anchor at the edit frame.
+/// pattern, sample rate) re-anchor at the edit frame.
+///
+/// `set_bpm`, `apply_pattern`, `rebase_sample_rate`, `pending_switch` and
+/// `events_in` never allocate, so they can run on the real-time thread.
 pub struct Timeline {
+    sample_rate: u32,
     bpm: Bpm,
     /// Ticks per measure, `R · 60 · sr`.
     q: u64,
     anchor: Anchor,
     cursors: Vec<Cursor>,
+    /// Per pulse index: absolute measure from which the pulse is audible
+    /// (pulses added live wait for the next "one"). Same length as `cursors`.
+    starts: Vec<u64>,
+    /// Scratch space for re-indexing `starts` without allocating.
+    scratch: Vec<u64>,
+    switch: Option<Switch>,
 }
 
 impl Timeline {
@@ -94,25 +150,127 @@ impl Timeline {
     pub fn new(sample_rate: u32, bpm: Bpm, pattern: &Pattern, start_frame: u64) -> Self {
         let reference = u64::from(pattern.reference_beats().max(1));
         let mut tl = Timeline {
+            sample_rate,
             bpm,
             q: reference * 60 * u64::from(sample_rate),
-            anchor: Anchor {
-                frame: start_frame,
-                measure: 0,
-                ticks: 0,
-            },
+            anchor: Anchor::measure_start(start_frame, 0),
             cursors: Vec::new(),
+            starts: Vec::new(),
+            scratch: Vec::new(),
+            switch: None,
         };
         tl.sync_pattern(pattern);
         tl
     }
 
-    /// Sizes the cursor storage for `pattern` and invalidates every cursor.
-    /// Allocates, so call it outside the real-time thread. It does not change
-    /// the anchor or the measure length.
+    /// Makes room for `pattern`'s pulses and invalidates every cursor.
+    /// Allocates, so call it outside the real-time thread, and before
+    /// [`apply_pattern`](Self::apply_pattern) with a pattern that has more
+    /// pulses than any seen so far. Storage only grows (extra slots are
+    /// ignored), so syncing the new pattern before an edit is always safe.
+    /// It does not change the anchor or the measure length.
     pub fn sync_pattern(&mut self, pattern: &Pattern) {
+        let len = pattern.pulses.len().max(self.cursors.len());
         self.cursors.clear();
-        self.cursors.resize(pattern.pulses.len(), Cursor::INVALID);
+        self.cursors.resize(len, Cursor::INVALID);
+        self.starts.resize(len, 0);
+        self.scratch.resize(len, 0);
+    }
+
+    /// Changes the tempo from `at_frame` on, keeping the musical position
+    /// exactly: the anchor moves to `at_frame` with
+    /// `ticks = anchor_ticks + (at_frame − anchor_frame)·bpm_old` reduced mod
+    /// `Q` (carry into the measure). A beat the old tempo would have fired at
+    /// `at_frame` still fires there. Same BPM is a no-op. `at_frame` is the
+    /// first frame not yet rendered; frames before the anchor count as the
+    /// anchor frame.
+    pub fn set_bpm(&mut self, at_frame: u64, bpm: Bpm) {
+        self.commit_switch_until(at_frame);
+        if bpm == self.bpm {
+            return;
+        }
+        self.reanchor(at_frame);
+        self.bpm = bpm;
+        self.invalidate();
+    }
+
+    /// Applies an edit from `old` (the pattern rendered so far) to `new`
+    /// at `at_frame` (the first frame not yet rendered).
+    ///
+    /// If the reference cycle changes (pulse 0's beat count, or a different
+    /// pulse 0 after a reorder or removal) the result is
+    /// [`ApplyMode::AtNextOne`]: the caller keeps passing `old` to `events_in`
+    /// for frames before the returned frame and `new` from it on; there the
+    /// timeline re-anchors with `ticks = 0` and the new `Q`. Until then
+    /// [`pending_switch`](Self::pending_switch) reports the frame, which
+    /// follows later tempo changes. A later call while a switch is pending
+    /// must pass the same `old`; it replaces the pending switch, or cancels it
+    /// when the reference is back to `old`'s.
+    ///
+    /// Otherwise the result is [`ApplyMode::Now`] and `new` is rendered from
+    /// `at_frame` on. Pulses not in `old` (by id) become audible from the
+    /// next "one". A pulse whose beat count changed resumes at its first
+    /// new-grid beat with frame `>= at_frame`; everything else (sound,
+    /// intensities, enabled, removed pulses) is immediate.
+    ///
+    /// Never allocates: if `new` has more pulses than any pattern seen so
+    /// far, call [`sync_pattern`](Self::sync_pattern) with it first (pulses
+    /// past the synced count are ignored).
+    pub fn apply_pattern(&mut self, at_frame: u64, old: &Pattern, new: &Pattern) -> ApplyMode {
+        self.commit_switch_until(at_frame);
+        let reference = |p: &Pattern| p.pulses.first().map(|x| (x.id, x.beats));
+        if reference(old) != reference(new) {
+            let measure = self.next_one(at_frame);
+            self.switch = Some(Switch {
+                measure,
+                reference: u64::from(new.reference_beats().max(1)),
+            });
+            return ApplyMode::AtNextOne(self.measure_frame(measure));
+        }
+        self.switch = None;
+        debug_assert!(
+            new.pulses.len() <= self.scratch.len(),
+            "new pattern has more pulses than synced; call sync_pattern first"
+        );
+        let next_one = self.next_one(at_frame);
+        for (slot, pulse) in self.scratch.iter_mut().zip(&new.pulses) {
+            *slot = match old.pulses.iter().position(|o| o.id == pulse.id) {
+                Some(j) => self.starts.get(j).copied().unwrap_or(0),
+                None => next_one,
+            };
+        }
+        core::mem::swap(&mut self.starts, &mut self.scratch);
+        self.invalidate();
+        ApplyMode::Now
+    }
+
+    /// Frame of a pending reference-cycle switch, if any (see
+    /// [`apply_pattern`](Self::apply_pattern)).
+    pub fn pending_switch(&self) -> Option<u64> {
+        self.switch.map(|s| self.measure_frame(s.measure))
+    }
+
+    /// The output now runs at `new_sr`, and frame `new_start_frame` of the new
+    /// stream continues where frame `at_frame_old` of the old one stopped
+    /// (the first old frame not rendered). The position is converted with
+    /// `ticks' = floor(ticks · new_sr / old_sr)`; beats not yet emitted on the
+    /// old stream are emitted on the new one, the others are not repeated.
+    pub fn rebase_sample_rate(&mut self, at_frame_old: u64, new_sr: u32, new_start_frame: u64) {
+        self.commit_switch_until(at_frame_old);
+        self.reanchor(at_frame_old);
+        let (old, new) = (i128::from(self.sample_rate), i128::from(new_sr));
+        let a = self.anchor;
+        let (num, den) = reduce(a.done_num * new, a.done_den * old);
+        self.anchor = Anchor {
+            frame: new_start_frame,
+            measure: a.measure,
+            ticks: to_u64(i128::from(a.ticks) * new / old),
+            done_num: num,
+            done_den: den,
+        };
+        self.q = self.q / u64::from(self.sample_rate) * u64::from(new_sr);
+        self.sample_rate = new_sr;
+        self.invalidate();
     }
 
     /// Appends every hit with `from <= frame < to`, ascending by frame, ties
@@ -127,6 +285,18 @@ impl Timeline {
         to: u64,
         out: &mut impl Extend<BeatHit>,
     ) {
+        let mut to = to;
+        if let Some(switch) = self.pending_switch() {
+            if from >= switch {
+                self.commit_switch_until(from);
+            } else {
+                debug_assert!(
+                    to <= switch,
+                    "render range crosses the pattern switch; split it there"
+                );
+                to = to.min(switch);
+            }
+        }
         debug_assert!(
             pattern.pulses.len() <= self.cursors.len(),
             "pattern has more pulses than synced; call sync_pattern first"
@@ -135,7 +305,7 @@ impl Timeline {
         for i in 0..count {
             let n = pattern.pulses[i].beats.max(1);
             if !self.cursor_fits(i, n, from) {
-                self.cursors[i] = self.seek(n, from);
+                self.cursors[i] = self.seek(i, n, from);
             }
         }
         loop {
@@ -177,17 +347,82 @@ impl Timeline {
         }
     }
 
-    /// Musical position at `frame`. Frames before the anchor report the
-    /// anchor position.
+    /// Musical position at `frame`, including a pending switch at or before
+    /// it. Frames before the anchor report the anchor position.
     pub fn position_at(&self, frame: u64) -> MusicalPosition {
-        let elapsed = i128::from(frame.saturating_sub(self.anchor.frame));
-        let phase = elapsed * i128::from(self.bpm.get()) + i128::from(self.anchor.ticks);
-        let q = i128::from(self.q);
+        let (anchor, q) = match (self.switch, self.pending_switch()) {
+            (Some(s), Some(f)) if frame >= f => {
+                (Anchor::measure_start(f, s.measure), self.q_for(s.reference))
+            }
+            _ => (self.anchor, self.q),
+        };
+        let elapsed = i128::from(frame.saturating_sub(anchor.frame));
+        let phase = elapsed * i128::from(self.bpm.get()) + i128::from(anchor.ticks);
+        let qi = i128::from(q);
         MusicalPosition {
-            measure: self.anchor.measure + (phase / q) as u64,
-            ticks: (phase % q) as u64,
-            ticks_per_measure: self.q,
+            measure: anchor.measure + (phase / qi) as u64,
+            ticks: (phase % qi) as u64,
+            ticks_per_measure: q,
         }
+    }
+
+    fn q_for(&self, reference: u64) -> u64 {
+        reference * 60 * u64::from(self.sample_rate)
+    }
+
+    fn invalidate(&mut self) {
+        self.cursors.fill(Cursor::INVALID);
+    }
+
+    /// Phase in ticks from the start of the anchor measure at `frame`
+    /// (`>= anchor.frame`).
+    fn phase(&self, frame: u64) -> i128 {
+        i128::from(frame - self.anchor.frame) * i128::from(self.bpm.get())
+            + i128::from(self.anchor.ticks)
+    }
+
+    /// Moves the anchor to `at` (clamped to the anchor frame) with the exact
+    /// phase there. The beats already emitted are those the current timeline
+    /// fires before `at`: target `<= phase(at − 1)`.
+    fn reanchor(&mut self, at: u64) {
+        if at <= self.anchor.frame {
+            return;
+        }
+        let phase = self.phase(at);
+        let q = i128::from(self.q);
+        let ticks = phase % q;
+        self.anchor = Anchor {
+            frame: at,
+            measure: self.anchor.measure + (phase / q) as u64,
+            ticks: ticks as u64,
+            done_num: ticks - i128::from(self.bpm.get()),
+            done_den: 1,
+        };
+    }
+
+    /// Performs a pending switch if its frame is `<= frame`.
+    fn commit_switch_until(&mut self, frame: u64) {
+        if let (Some(s), Some(f)) = (self.switch, self.pending_switch())
+            && f <= frame
+        {
+            self.anchor = Anchor::measure_start(f, s.measure);
+            self.q = self.q_for(s.reference);
+            self.switch = None;
+            // Everything in the new pattern plays from this "one".
+            self.starts.fill(0);
+            self.invalidate();
+        }
+    }
+
+    /// Absolute measure index of the first "one" whose frame is `>= frame`.
+    fn next_one(&self, frame: u64) -> u64 {
+        let first = self.pending_idx(1);
+        self.anchor.measure + self.seek_idx(1, frame, first)
+    }
+
+    /// Frame at which measure `measure` (`>= anchor.measure`) starts.
+    fn measure_frame(&self, measure: u64) -> u64 {
+        self.frame_of(1, measure.saturating_sub(self.anchor.measure))
     }
 
     /// True if cursor `i` holds the first beat at or after `from`.
@@ -196,19 +431,11 @@ impl Timeline {
         c.beats == beats && c.frame >= from && c.prev.is_none_or(|p| p < from)
     }
 
-    /// Cursor at the first beat of an `n`-beat pulse whose frame is `>= from`.
-    fn seek(&self, n: u32, from: u64) -> Cursor {
-        let first = self.first_idx(n);
-        let idx = if from <= self.anchor.frame {
-            first
-        } else {
-            // Smallest idx with ceil(num / (n·bpm)) >= d, i.e.
-            // idx·Q > (d - 1)·n·bpm + anchor_ticks·n.
-            let d = i128::from(from - self.anchor.frame);
-            let nn = i128::from(n);
-            let x = (d - 1) * nn * i128::from(self.bpm.get()) + i128::from(self.anchor.ticks) * nn;
-            to_u64(x / i128::from(self.q) + 1).max(first)
-        };
+    /// Cursor at the first beat of pulse `i` (`n` beats) whose frame is
+    /// `>= from`.
+    fn seek(&self, i: usize, n: u32, from: u64) -> Cursor {
+        let first = self.first_idx(i, n);
+        let idx = self.seek_idx(n, from, first);
         Cursor {
             beats: n,
             idx,
@@ -217,29 +444,65 @@ impl Timeline {
         }
     }
 
-    /// First beat index (from the anchor measure start) not before the anchor:
-    /// `ceil(anchor_ticks · n / Q)`.
-    fn first_idx(&self, n: u32) -> u64 {
-        to_u64(div_ceil(
-            i128::from(self.anchor.ticks) * i128::from(n),
-            i128::from(self.q),
-        ))
+    /// Smallest beat index `>= first` of an `n`-beat grid with frame `>= from`.
+    fn seek_idx(&self, n: u32, from: u64, first: u64) -> u64 {
+        if from <= self.anchor.frame {
+            return first;
+        }
+        // Smallest idx with ceil(num / (n·bpm)) >= d, i.e.
+        // idx·Q > (d - 1)·n·bpm + anchor_ticks·n. Pending beats from before the
+        // anchor sit at the anchor frame, before `from`, so they never match.
+        let d = i128::from(from - self.anchor.frame);
+        let nn = i128::from(n);
+        let x = (d - 1) * nn * i128::from(self.bpm.get()) + i128::from(self.anchor.ticks) * nn;
+        to_u64(x / i128::from(self.q) + 1).max(first)
+    }
+
+    /// First beat index (from the anchor measure start) pulse `i` may emit:
+    /// the first beat not emitted yet, or later if the pulse waits for a "one".
+    fn first_idx(&self, i: usize, n: u32) -> u64 {
+        let pending = self.pending_idx(n);
+        match self.starts.get(i) {
+            Some(&start) if start > self.anchor.measure => {
+                pending.max((start - self.anchor.measure) * u64::from(n))
+            }
+            _ => pending,
+        }
+    }
+
+    /// First beat index with target `idx·Q/n > done`:
+    /// `floor(done · n / Q) + 1`, at least 0.
+    fn pending_idx(&self, n: u32) -> u64 {
+        let a = self.anchor;
+        let below = (a.done_num * i128::from(n)).div_euclid(i128::from(self.q) * a.done_den);
+        to_u64(below + 1)
     }
 
     /// Frame of beat `idx` (counted from the anchor measure start) of an
-    /// `n`-beat pulse: `anchor_frame + ceil((idx·Q − anchor_ticks·n) / (n·bpm))`.
+    /// `n`-beat pulse: `anchor_frame + ceil((idx·Q − anchor_ticks·n) / (n·bpm))`,
+    /// or the anchor frame for a pending beat whose target is not after the
+    /// anchor phase.
     fn frame_of(&self, n: u32, idx: u64) -> u64 {
         let nn = i128::from(n);
         let num = i128::from(idx) * i128::from(self.q) - i128::from(self.anchor.ticks) * nn;
-        debug_assert!(num >= 0, "beat before the anchor");
-        let offset = div_ceil(num, nn * i128::from(self.bpm.get()));
+        let offset = div_ceil(num, nn * i128::from(self.bpm.get())).max(0);
         to_u64(i128::from(self.anchor.frame) + offset)
     }
 }
 
-/// Ceiling division for `a >= 0`, `b > 0`.
+/// Ceiling division for any `a`, `b > 0`.
 fn div_ceil(a: i128, b: i128) -> i128 {
-    (a + b - 1) / b
+    -((-a).div_euclid(b))
+}
+
+/// `num / den` in lowest terms (`den > 0`).
+fn reduce(num: i128, den: i128) -> (i128, i128) {
+    let (mut x, mut y) = (num.unsigned_abs(), den.unsigned_abs());
+    while y != 0 {
+        (x, y) = (y, x % y);
+    }
+    let g = x.max(1) as i128;
+    (num / g, den / g)
 }
 
 /// Saturating conversion; frames past `u64::MAX` are never reached.
