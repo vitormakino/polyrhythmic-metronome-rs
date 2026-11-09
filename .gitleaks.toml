@@ -1,0 +1,12 @@
+# gitleaks configuration. Used by .github/workflows/ci.yml (pushed/PR commits)
+# and .github/workflows/secret-scan.yml (full history, weekly and on demand).
+#
+# Inherits the default ruleset (cloud keys, GitHub tokens, private keys, ...).
+# The project handles no credentials, so there is no allowlist: any finding
+# fails CI. If a deliberate fake fixture is ever needed, allow that exact
+# string here with a comment; never exempt whole paths.
+
+title = "polyrhythmic-metronome-rs secret-scan config"
+
+[extend]
+useDefault = true

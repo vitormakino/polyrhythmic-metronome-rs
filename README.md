@@ -122,6 +122,12 @@ cargo run -p stress --release -- --minutes 10 --load <number of cores>
 
 Procedures and results are in [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
+## Security
+
+CI pins every GitHub Action to a commit SHA, runs with a read-only token, and
+scans commits for leaked secrets with gitleaks (the full history weekly).
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
 ## License
 
 GPL-3.0-or-later. See `LICENSE`. The embedded fonts (Inter, JetBrains Mono)
