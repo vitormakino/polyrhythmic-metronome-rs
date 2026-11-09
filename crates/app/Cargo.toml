@@ -1,0 +1,15 @@
+[package]
+name = "polyrhythmic-metronome-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native macOS polyrhythmic metronome application."
+
+[[bin]]
+name = "polyrhythmic-metronome"
+path = "src/main.rs"
+
+[lints]
+workspace = true

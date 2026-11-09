@@ -1,0 +1,17 @@
+[package]
+name = "polyrhythmic-metronome-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Real-time CoreAudio/cpal engine for the polyrhythmic metronome."
+
+[lib]
+name = "pm_audio"
+
+[lints.rust]
+unsafe_code = "allow" # CoreAudio property queries
+
+[lints.clippy]
+all = "warn"

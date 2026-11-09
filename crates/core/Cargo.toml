@@ -1,0 +1,14 @@
+[package]
+name = "polyrhythmic-metronome-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure domain model, exact timeline and offline synthesis for the polyrhythmic metronome."
+
+[lib]
+name = "pm_core"
+
+[lints]
+workspace = true
