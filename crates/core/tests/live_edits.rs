@@ -471,7 +471,7 @@ fn reverting_the_reference_cancels_the_switch() {
 fn added_pulse_starts_at_next_one() {
     let old = Pattern::default();
     let mut new = old.clone();
-    let c = new.add_pulse();
+    let c = new.add_pulse().unwrap();
     let mut tl = Timeline::new(48_000, Bpm::new(120), &old, 0);
     let mut hits = render(&mut tl, &old, 0, 10_000);
     tl.sync_pattern(&new);
@@ -491,7 +491,7 @@ fn added_pulse_starts_at_next_one() {
 fn added_pulse_survives_a_reorder_before_its_one() {
     let old = Pattern::default();
     let mut added = old.clone();
-    let c = added.add_pulse();
+    let c = added.add_pulse().unwrap();
     let mut reordered = added.clone();
     reordered.move_pulse(2, 1);
     let mut tl = Timeline::new(48_000, Bpm::new(120), &old, 0);

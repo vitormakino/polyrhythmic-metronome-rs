@@ -12,6 +12,10 @@ const PALETTE: [[u8; 3]; 6] = [
     [0xea, 0xb3, 0x08],
 ];
 
+/// Most pulses a pattern can hold. The real-time timeline reserves room for
+/// this many up front, so pattern edits never allocate on the audio thread.
+pub const MAX_PULSES: usize = 16;
+
 /// Tempo in beats per minute, always within `MIN..=MAX`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Bpm(u16);
@@ -150,7 +154,12 @@ impl Pattern {
     }
 
     /// Appends a pulse with `last.beats + 1` beats, all Medium, Sine.
-    pub fn add_pulse(&mut self) -> PulseId {
+    /// Returns `None` and changes nothing once the pattern has
+    /// [`MAX_PULSES`] pulses.
+    pub fn add_pulse(&mut self) -> Option<PulseId> {
+        if self.pulses.len() >= MAX_PULSES {
+            return None;
+        }
         let index = self.pulses.len();
         let beats = self.pulses.last().map_or(4, |p| p.beats + 1);
         let id = PulseId(self.next_id);
@@ -165,7 +174,7 @@ impl Pattern {
             sound: SoundType::Sine,
             enabled: true,
         });
-        id
+        Some(id)
     }
 
     /// Removes a pulse; the last remaining pulse cannot be removed.
@@ -275,7 +284,7 @@ mod tests {
     #[test]
     fn add_pulse_follows_web() {
         let mut p = Pattern::default();
-        let id = p.add_pulse();
+        let id = p.add_pulse().unwrap();
         let n = p.pulse(id).unwrap();
         assert_eq!(n.beats, 4);
         assert!(n.intensities.iter().all(|&i| i == Medium));
@@ -285,6 +294,19 @@ mod tests {
         assert_eq!(n.frequency_hz, 400.0 + ((2.0_f32 * 137.0) % 400.0));
         assert_ne!(id, PulseId(0));
         assert_ne!(id, PulseId(1));
+    }
+
+    #[test]
+    fn add_pulse_stops_at_max_pulses() {
+        let mut p = Pattern::default();
+        for _ in 2..MAX_PULSES {
+            assert!(p.add_pulse().is_some());
+        }
+        assert_eq!(p.pulses.len(), MAX_PULSES);
+        let next_id = p.next_id;
+        assert_eq!(p.add_pulse(), None);
+        assert_eq!(p.pulses.len(), MAX_PULSES);
+        assert_eq!(p.next_id, next_id, "no id is consumed");
     }
 
     #[test]
@@ -307,7 +329,7 @@ mod tests {
     #[test]
     fn cannot_remove_last_pulse() {
         let mut p = Pattern::default();
-        p.add_pulse();
+        p.add_pulse().unwrap();
         let ids: Vec<_> = p.pulses.iter().map(|x| x.id).collect();
         assert!(p.remove(ids[0]));
         assert!(p.remove(ids[1]));

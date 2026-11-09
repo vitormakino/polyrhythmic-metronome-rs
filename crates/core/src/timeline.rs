@@ -14,7 +14,7 @@
 //! at the edit frame itself is never lost, and one already fired is never
 //! repeated.
 
-use crate::model::{Bpm, Intensity, Pattern, PulseId, SoundType};
+use crate::model::{Bpm, Intensity, MAX_PULSES, Pattern, PulseId, SoundType};
 
 /// One click to be rendered.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -128,8 +128,9 @@ impl Cursor {
 /// `(frame, measure, ticks)` point and the current BPM. Live edits (tempo,
 /// pattern, sample rate) re-anchor at the edit frame.
 ///
-/// `set_bpm`, `apply_pattern`, `rebase_sample_rate`, `pending_switch` and
-/// `events_in` never allocate, so they can run on the real-time thread.
+/// `set_bpm`, `apply_pattern`, `rebase_sample_rate`, `pending_switch`,
+/// `restart` and `events_in` never allocate, nor does `sync_pattern` up to
+/// [`MAX_PULSES`] pulses, so they can run on the real-time thread.
 pub struct Timeline {
     sample_rate: u32,
     bpm: Bpm,
@@ -146,7 +147,9 @@ pub struct Timeline {
 }
 
 impl Timeline {
-    /// Starts measure 0 exactly at `start_frame`.
+    /// Starts measure 0 exactly at `start_frame`. Room for [`MAX_PULSES`]
+    /// pulses is reserved here, so [`sync_pattern`](Self::sync_pattern) with
+    /// a pattern of at most that many pulses does not allocate.
     pub fn new(sample_rate: u32, bpm: Bpm, pattern: &Pattern, start_frame: u64) -> Self {
         let reference = u64::from(pattern.reference_beats().max(1));
         let mut tl = Timeline {
@@ -154,17 +157,77 @@ impl Timeline {
             bpm,
             q: reference * 60 * u64::from(sample_rate),
             anchor: Anchor::measure_start(start_frame, 0),
-            cursors: Vec::new(),
-            starts: Vec::new(),
-            scratch: Vec::new(),
+            cursors: Vec::with_capacity(MAX_PULSES),
+            starts: Vec::with_capacity(MAX_PULSES),
+            scratch: Vec::with_capacity(MAX_PULSES),
             switch: None,
         };
         tl.sync_pattern(pattern);
         tl
     }
 
+    /// Starts the timeline at `position` instead of measure 0: frame
+    /// `start_frame` is that musical position. This is how a rebuilt audio
+    /// stream continues the music of the stream it replaces, with `position`
+    /// taken from the old timeline's [`position_at`](Self::position_at) at
+    /// the first frame the old stream did not render.
+    ///
+    /// The position is converted to this timeline's measure length `Q` with
+    /// `ticks' = floor(ticks · Q / position.ticks_per_measure)`, exactly as
+    /// [`rebase_sample_rate`](Self::rebase_sample_rate) does, so a different
+    /// sample rate is fine. Beats the old stream had not played yet (also one
+    /// whose frame was exactly the seam) are played here; the ones it played
+    /// are not repeated. That bound depends on the old tempo, so `bpm` must be
+    /// the tempo the old stream was playing at that position, and `pattern`
+    /// the pattern it was playing. Every pulse is audible from
+    /// `start_frame` (a pulse still waiting for its first "one" on the old
+    /// stream starts right away). A zero `ticks_per_measure` means "start of
+    /// `position.measure`".
+    pub fn resume(
+        sample_rate: u32,
+        bpm: Bpm,
+        pattern: &Pattern,
+        position: MusicalPosition,
+        start_frame: u64,
+    ) -> Self {
+        let mut tl = Self::new(sample_rate, bpm, pattern, start_frame);
+        let old_q = i128::from(position.ticks_per_measure);
+        if old_q == 0 {
+            tl.anchor = Anchor::measure_start(start_frame, position.measure);
+            return tl;
+        }
+        let q = i128::from(tl.q);
+        let carry = i128::from(position.ticks) / old_q;
+        let ticks = i128::from(position.ticks) % old_q;
+        // The old stream played every beat with target <= phase(f - 1),
+        // i.e. ticks - bpm in its units.
+        let (done_num, done_den) = reduce((ticks - i128::from(bpm.get())) * q, old_q);
+        tl.anchor = Anchor {
+            frame: start_frame,
+            measure: position.measure + carry as u64,
+            ticks: to_u64(ticks * q / old_q),
+            done_num,
+            done_den,
+        };
+        tl
+    }
+
+    /// Starts measure 0 of `pattern` at `start_frame` again, as
+    /// [`new`](Self::new) would (same sample rate, current BPM), but without
+    /// allocating: a pending switch is dropped and every pulse plays from the
+    /// "one". `pattern` must not have more pulses than synced.
+    pub fn restart(&mut self, pattern: &Pattern, start_frame: u64) {
+        self.q = self.q_for(u64::from(pattern.reference_beats().max(1)));
+        self.anchor = Anchor::measure_start(start_frame, 0);
+        self.switch = None;
+        self.starts.fill(0);
+        self.invalidate();
+    }
+
     /// Makes room for `pattern`'s pulses and invalidates every cursor.
-    /// Allocates, so call it outside the real-time thread, and before
+    /// Allocates only past [`MAX_PULSES`] pulses (room for that many is
+    /// reserved by [`new`](Self::new)), so up to that it may run on the
+    /// real-time thread. Call it before
     /// [`apply_pattern`](Self::apply_pattern) with a pattern that has more
     /// pulses than any seen so far. Storage only grows (extra slots are
     /// ignored), so syncing the new pattern before an edit is always safe.
@@ -278,6 +341,12 @@ impl Timeline {
     /// still counted in beat numbering. Never allocates by itself: `out` must
     /// have room (e.g. a `Vec` with enough reserved capacity). Pulses beyond
     /// those seen by the last `sync_pattern` are ignored.
+    ///
+    /// While a switch is pending (see [`pending_switch`](Self::pending_switch))
+    /// a range must not cross it: render `[from, switch)` with the old pattern
+    /// and `[switch, to)` with the new one, splitting the caller's buffer at
+    /// the switch frame. A crossing range is a bug: it `debug_assert`s, and in
+    /// release it is cut at the switch (hits from the switch on are missing).
     pub fn events_in(
         &mut self,
         pattern: &Pattern,

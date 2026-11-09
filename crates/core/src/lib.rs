@@ -5,7 +5,7 @@ pub mod synth;
 pub mod tap;
 pub mod timeline;
 
-pub use model::{Bpm, Intensity, Pattern, Pulse, PulseId, SoundType};
+pub use model::{Bpm, Intensity, MAX_PULSES, Pattern, Pulse, PulseId, SoundType};
 pub use synth::SampleBank;
 pub use tap::TapTempo;
 pub use timeline::{ApplyMode, BeatHit, MusicalPosition, TempoSource, Timeline};
