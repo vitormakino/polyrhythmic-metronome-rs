@@ -13,7 +13,9 @@ pub enum Remote {
     TogglePlay,
     /// Tempo up or down by this many BPM.
     BpmStep(i32),
-    Tap,
+    /// A tap, pressed at this instant (taken in the hotkey handler, so the
+    /// tempo does not depend on when the app gets to it).
+    Tap(Instant),
     /// Full ⇄ mini, showing the window if it was hidden.
     ToggleMini,
     /// Show the window in this mode.
@@ -25,7 +27,7 @@ pub enum Remote {
 /// For the requests a view could make too: edits `ui` the way the view does
 /// and returns the view's actions. Window requests return nothing (see
 /// [`target_mode`]).
-pub fn view_actions(ui: &mut UiState, remote: Remote, now: Instant) -> Vec<UiAction> {
+pub fn view_actions(ui: &mut UiState, remote: Remote) -> Vec<UiAction> {
     let mut actions = Vec::new();
     match remote {
         Remote::TogglePlay => {
@@ -39,7 +41,7 @@ pub fn view_actions(ui: &mut UiState, remote: Remote, now: Instant) -> Vec<UiAct
                 actions.push(UiAction::SetBpm(bpm));
             }
         }
-        Remote::Tap => ui.tap(now, &mut actions),
+        Remote::Tap(pressed) => ui.tap(pressed, &mut actions),
         Remote::ToggleMini | Remote::Show(_) | Remote::Quit => {}
     }
     actions
@@ -53,7 +55,7 @@ pub fn target_mode(remote: Remote, current: WindowMode) -> Option<WindowMode> {
             WindowMode::Full => WindowMode::Mini,
             WindowMode::Mini => WindowMode::Full,
         }),
-        Remote::TogglePlay | Remote::BpmStep(_) | Remote::Tap | Remote::Quit => None,
+        Remote::TogglePlay | Remote::BpmStep(_) | Remote::Tap(_) | Remote::Quit => None,
     }
 }
 
@@ -66,33 +68,31 @@ mod tests {
     #[test]
     fn toggle_play_flips_and_asks_like_the_play_button() {
         let mut ui = UiState::default();
-        let now = Instant::now();
         assert_eq!(
-            view_actions(&mut ui, Remote::TogglePlay, now),
+            view_actions(&mut ui, Remote::TogglePlay),
             [UiAction::TogglePlay]
         );
         assert!(ui.playing);
-        view_actions(&mut ui, Remote::TogglePlay, now);
+        view_actions(&mut ui, Remote::TogglePlay);
         assert!(!ui.playing);
     }
 
     #[test]
     fn bpm_steps_stay_in_range() {
         let mut ui = UiState::default();
-        let now = Instant::now();
         assert_eq!(
-            view_actions(&mut ui, Remote::BpmStep(1), now),
+            view_actions(&mut ui, Remote::BpmStep(1)),
             [UiAction::SetBpm(Bpm::new(121))]
         );
         assert_eq!(
-            view_actions(&mut ui, Remote::BpmStep(-1), now),
+            view_actions(&mut ui, Remote::BpmStep(-1)),
             [UiAction::SetBpm(Bpm::new(120))]
         );
         ui.bpm = Bpm::new(300);
-        assert!(view_actions(&mut ui, Remote::BpmStep(1), now).is_empty());
+        assert!(view_actions(&mut ui, Remote::BpmStep(1)).is_empty());
         assert_eq!(ui.bpm, Bpm::new(300));
         ui.bpm = Bpm::new(40);
-        assert!(view_actions(&mut ui, Remote::BpmStep(-1), now).is_empty());
+        assert!(view_actions(&mut ui, Remote::BpmStep(-1)).is_empty());
     }
 
     #[test]
@@ -102,8 +102,24 @@ mod tests {
         let start = Instant::now();
         let mut last = Vec::new();
         for i in 0..4 {
-            last = view_actions(&mut ui, Remote::Tap, start + Duration::from_millis(500 * i));
+            let at = start + Duration::from_millis(500 * i);
+            last = view_actions(&mut ui, Remote::Tap(at));
             assert!(matches!(last[0], UiAction::Tap(_)));
+        }
+        assert_eq!(last.last(), Some(&UiAction::SetBpm(Bpm::new(120))));
+        assert_eq!(ui.bpm, Bpm::new(120));
+    }
+
+    #[test]
+    fn taps_count_from_the_press_not_from_when_they_are_handled() {
+        let mut ui = UiState::default();
+        let start = Instant::now();
+        // Pressed every 500 ms, all four handled in one late `logic` call
+        // (the channel is drained at once): the press times still count.
+        let mut last = Vec::new();
+        for i in 0..4 {
+            let pressed = start + Duration::from_millis(500 * i);
+            last = view_actions(&mut ui, Remote::Tap(pressed));
         }
         assert_eq!(last.last(), Some(&UiAction::SetBpm(Bpm::new(120))));
         assert_eq!(ui.bpm, Bpm::new(120));
@@ -120,9 +136,8 @@ mod tests {
         assert_eq!(target_mode(Remote::Quit, Full), None);
 
         let mut ui = UiState::default();
-        let now = Instant::now();
         for r in [Remote::Show(Mini), Remote::ToggleMini, Remote::Quit] {
-            assert!(view_actions(&mut ui, r, now).is_empty());
+            assert!(view_actions(&mut ui, r).is_empty());
         }
         assert_eq!(ui.mode, Full);
     }

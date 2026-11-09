@@ -5,6 +5,7 @@
 //! first `App::logic` call). Presses arrive through [`forward`] as [`Remote`]s.
 
 use std::sync::mpsc::Sender;
+use std::time::Instant;
 
 use eframe::egui;
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
@@ -29,11 +30,11 @@ pub fn toggle_mini() -> HotKey {
     HotKey::new(Some(MODS), Code::KeyM)
 }
 
-/// What the hotkey with this id asks for.
-pub fn map_hotkey(id: u32) -> Option<Remote> {
+/// What the hotkey with this id, pressed at `pressed`, asks for.
+pub fn map_hotkey(id: u32, pressed: Instant) -> Option<Remote> {
     [
         (play_stop(), Remote::TogglePlay),
-        (tap(), Remote::Tap),
+        (tap(), Remote::Tap(pressed)),
         (toggle_mini(), Remote::ToggleMini),
     ]
     .into_iter()
@@ -57,11 +58,13 @@ pub fn register_hotkeys() -> Result<GlobalHotKeyManager, global_hotkey::Error> {
 }
 
 /// Sends hotkey presses (not releases) to `tx` and wakes the app, also while
-/// its window is hidden.
+/// its window is hidden. The press time is taken here, not when the app
+/// drains the channel.
 pub fn forward(tx: Sender<Remote>, ctx: egui::Context) {
     GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
+        let pressed = Instant::now();
         if event.state == HotKeyState::Pressed
-            && let Some(remote) = map_hotkey(event.id)
+            && let Some(remote) = map_hotkey(event.id, pressed)
         {
             let _ = tx.send(remote);
             ctx.request_repaint();
@@ -75,12 +78,15 @@ mod tests {
 
     #[test]
     fn hotkeys_map_to_actions() {
-        assert_eq!(map_hotkey(play_stop().id()), Some(Remote::TogglePlay));
-        assert_eq!(map_hotkey(tap().id()), Some(Remote::Tap));
-        assert_eq!(map_hotkey(toggle_mini().id()), Some(Remote::ToggleMini));
+        let pressed = Instant::now();
+        let map = |id| map_hotkey(id, pressed);
+        assert_eq!(map(play_stop().id()), Some(Remote::TogglePlay));
+        // A tap carries when its key was pressed.
+        assert_eq!(map(tap().id()), Some(Remote::Tap(pressed)));
+        assert_eq!(map(toggle_mini().id()), Some(Remote::ToggleMini));
         // Same key without the modifiers, or another key: not ours.
-        assert_eq!(map_hotkey(HotKey::new(None, Code::Space).id()), None);
-        assert_eq!(map_hotkey(HotKey::new(Some(MODS), Code::KeyX).id()), None);
+        assert_eq!(map(HotKey::new(None, Code::Space).id()), None);
+        assert_eq!(map(HotKey::new(Some(MODS), Code::KeyX).id()), None);
     }
 
     #[test]

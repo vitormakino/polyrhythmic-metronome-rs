@@ -175,7 +175,7 @@ impl App {
         } else if let Some(mode) = remote::target_mode(remote, self.windows.mode()) {
             self.show(ctx, mode, now);
         } else {
-            for action in remote::view_actions(&mut self.ctl.ui, remote, now) {
+            for action in remote::view_actions(&mut self.ctl.ui, remote) {
                 self.handle(ctx, action, now);
             }
         }

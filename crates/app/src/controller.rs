@@ -196,7 +196,7 @@ mod tests {
         let (mut c, mut audio) = lit();
         let pulse = c.ui.pattern.pulses[0].id;
         // Not through a view's button: the menu bar item or the hotkey.
-        for action in remote::view_actions(&mut c.ui, Remote::TogglePlay, Instant::now()) {
+        for action in remote::view_actions(&mut c.ui, Remote::TogglePlay) {
             c.apply(&mut audio, action);
         }
         assert!(!c.ui.playing);
