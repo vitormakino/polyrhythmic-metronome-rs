@@ -14,3 +14,4 @@ workspace = true
 [dependencies]
 polyrhythmic-metronome-core = { path = "../../crates/core" }
 polyrhythmic-metronome-audio = { path = "../../crates/audio" }
+assert_no_alloc.workspace = true

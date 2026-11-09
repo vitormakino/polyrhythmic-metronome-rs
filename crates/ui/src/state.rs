@@ -61,6 +61,9 @@ pub struct UiState {
     pub visual_offset: Duration,
     pub underruns: u64,
     pub device_name: Option<String>,
+    /// Why the output could not be opened, shown on hover over "sem saída
+    /// de áudio".
+    pub audio_error: Option<String>,
     tap: TapTempo,
     tap_epoch: Instant,
     pending: VecDeque<BeatEvent>,
@@ -82,6 +85,7 @@ impl Default for UiState {
             visual_offset: Duration::ZERO,
             underruns: 0,
             device_name: None,
+            audio_error: None,
             tap: TapTempo::default(),
             tap_epoch: Instant::now(),
             pending: VecDeque::with_capacity(PENDING_BEATS_CAP),

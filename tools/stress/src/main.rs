@@ -26,6 +26,11 @@ use std::time::{Duration, Instant};
 use pm_audio::{AudioService, EngineInit};
 use pm_core::{Bpm, MusicalPosition};
 
+// Debug builds abort on an allocation inside the audio callback, as the app.
+#[cfg(debug_assertions)]
+#[global_allocator]
+static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
+
 const BPM: i32 = 300;
 /// Output tap: about 21 s at 48 kHz, so a stalled main thread loses nothing.
 const TAP_SAMPLES: usize = 1 << 20;
@@ -119,11 +124,22 @@ fn run(args: &Args) -> Result<bool, String> {
     let run_for = Duration::from_secs_f64(args.minutes * 60.0);
     let mut next_tick = started;
     let mut next_report = started + Duration::from_secs(30);
+    let mut decided = 0;
     while started.elapsed() < run_for {
         let now = Instant::now();
         if now >= next_tick {
             service.tick();
             next_tick = now + Duration::from_millis(250);
+            if service.rebuild_reasons().total() != decided {
+                decided = service.rebuild_reasons().total();
+                let reason = service
+                    .last_rebuild_reason()
+                    .map_or_else(|| "?".to_owned(), ToString::to_string);
+                println!(
+                    "  {:>5.1} s, rebuild: {reason}",
+                    started.elapsed().as_secs_f64()
+                );
+            }
         }
         if let Some(tap) = service.tap() {
             while let Ok(s) = tap.samples.pop() {
@@ -143,6 +159,9 @@ fn run(args: &Args) -> Result<bool, String> {
     }
     let underruns = service.handle().underruns.load(Ordering::Relaxed);
     let rebuilds = service.rebuilds();
+    let reasons = service.rebuild_reasons();
+    let last_reason = service.last_rebuild_reason().cloned();
+    let last_error = service.last_error().map(ToString::to_string);
     let dropped = service.tap().map_or(u64::MAX, |t| t.dropped());
     if let Some(tap) = service.tap() {
         while let Ok(s) = tap.samples.pop() {
@@ -182,9 +201,19 @@ fn run(args: &Args) -> Result<bool, String> {
     );
     println!("underruns:                {underruns}");
     println!("stream rebuilds:          {rebuilds}");
+    println!(
+        "rebuild reasons:          slept {}, stalled {}, stream error {}, device changed {}",
+        reasons.slept, reasons.stalled, reasons.stream_error, reasons.device_changed
+    );
+    if let Some(reason) = last_reason {
+        println!("last rebuild reason:      {reason}");
+    }
+    if let Some(e) = last_error {
+        println!("last open error:          {e}");
+    }
     println!("tap frames dropped:       {dropped}");
     // Dropped tap frames or a rebuild void the recording.
-    let valid = rebuilds == 0 && dropped == 0;
+    let valid = rebuilds == 0 && reasons.total() == 0 && dropped == 0;
     let verdict = if !valid {
         "INVALID (recording is not contiguous)"
     } else if !report.is_exact() {

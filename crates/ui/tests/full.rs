@@ -357,6 +357,19 @@ fn footer_shows_output_state_and_underruns() {
 }
 
 #[test]
+fn no_output_shows_the_open_error_on_hover() {
+    let mut state = UiState::default();
+    state.audio_error = Some("audio output: device busy".to_owned());
+    let mut h = harness(MIN, state);
+    assert!(h.query_by_label_contains("device busy").is_none());
+    h.get_by_label("sem saída de áudio").hover();
+    for _ in 0..30 {
+        h.step();
+    }
+    assert!(h.query_by_label_contains("device busy").is_some());
+}
+
+#[test]
 fn settings_popover_sets_visual_offset() {
     let mut h = harness(MEDIUM, UiState::default());
     assert!(

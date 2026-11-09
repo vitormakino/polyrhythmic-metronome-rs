@@ -3,7 +3,11 @@
 pub mod engine;
 pub mod messages;
 pub mod stream;
+mod watch;
 
 pub use engine::{Engine, EngineHandle, EngineInit, soft_clip};
 pub use messages::{BeatEvent, Command, PatternUpdate, PositionReader, PositionSnapshot};
-pub use stream::{AudioError, AudioService, DeviceInfo, TapRx, Transport, query_output_latency};
+pub use stream::{
+    AudioError, AudioService, DeviceInfo, OutputLatency, TapRx, Transport, query_output_latency,
+};
+pub use watch::{RebuildCounts, RebuildReason};

@@ -168,8 +168,8 @@ fn real_device_smoke() {
     let mut service = AudioService::start(init(&Pattern::default(), 120)).expect("audio service");
     let info = service.device_info().expect("an output device");
     println!(
-        "device {:?} ({}) at {} Hz, reported latency {:?}",
-        info.name, info.uid, info.sample_rate, info.reported_latency
+        "device {:?} ({}) at {} Hz, latency {:?}",
+        info.name, info.uid, info.sample_rate, info.latency
     );
     assert!(service.send(Command::Play).is_ok());
     let started = Instant::now();

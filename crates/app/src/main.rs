@@ -28,6 +28,13 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Sense, ViewportCommand};
 use pm_audio::{AudioService, DeviceInfo, EngineInit};
+
+// Debug builds abort on an allocation inside the audio callback (the
+// `assert_no_alloc` guard in `pm_audio`'s data callback); release builds use
+// the system allocator unchanged.
+#[cfg(debug_assertions)]
+#[global_allocator]
+static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 use pm_ui::state::{UiAction, UiState, WindowMode};
 use pm_ui::theme;
 use pm_ui::views::footer::MAX_VISUAL_OFFSET_MS;
@@ -55,6 +62,8 @@ struct App {
     visual_offsets: BTreeMap<String, u32>,
     /// UID of the output the visual offset was last chosen for.
     device_uid: Option<String>,
+    /// Rebuild decisions already reported on stderr.
+    rebuilds_reported: u64,
     settings_dir: Option<PathBuf>,
     /// Last settings written; the latest ones and when they last changed.
     saved: Settings,
@@ -86,6 +95,7 @@ impl App {
             windows: Windows::new(settings.mode, settings.full_rect, settings.mini_rect),
             visual_offsets: settings.visual_offsets.clone(),
             device_uid: None,
+            rebuilds_reported: 0,
             settings_dir,
             saved: settings.clone(),
             pending: (settings, now),
@@ -102,9 +112,21 @@ impl App {
         app
     }
 
-    /// Device name for the views and, when the output changed, its visual
-    /// offset: the one saved for it, else what CoreAudio reports.
+    /// Device name and open error for the views and, when the output
+    /// changed, its visual offset: the one saved for it, else the latency
+    /// the beat times miss. Reports each stream rebuild on stderr.
     fn sync_device(&mut self) {
+        let decided = self.audio.rebuild_reasons().total();
+        if decided != self.rebuilds_reported {
+            self.rebuilds_reported = decided;
+            if let Some(reason) = self.audio.last_rebuild_reason() {
+                eprintln!("polyrhythmic-metronome: audio stream rebuilt: {reason}");
+            }
+            if let Some(e) = self.audio.last_error() {
+                eprintln!("polyrhythmic-metronome: {e}");
+            }
+        }
+        self.ctl.ui.audio_error = self.audio.last_error().map(ToString::to_string);
         let info = self.audio.device_info();
         self.ctl.ui.device_name = info.as_ref().map(|d| d.name.clone());
         let uid = info.as_ref().map(|d| d.uid.clone());
@@ -300,12 +322,16 @@ impl eframe::App for App {
 }
 
 /// The visual offset for `device`: the one the user set for it, else the
-/// latency CoreAudio reports for it (at most the slider's maximum).
+/// part of its latency that the beat events' times do not include yet (at
+/// most the slider's maximum). cpal's `playback` time, which stamps the
+/// events, already counts the buffer, device latency and safety offset;
+/// only the stream latency is left (see [`pm_audio::OutputLatency`]).
 fn visual_offset_for(device: &DeviceInfo, saved: &BTreeMap<String, u32>) -> Duration {
     match saved.get(&device.uid) {
         Some(&ms) => Duration::from_millis(u64::from(ms)),
         None => device
-            .reported_latency
+            .latency
+            .uncompensated()
             .min(Duration::from_millis(u64::from(MAX_VISUAL_OFFSET_MS))),
     }
 }
@@ -370,6 +396,8 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
+    use pm_audio::OutputLatency;
+
     use super::*;
 
     #[test]
@@ -396,12 +424,17 @@ mod tests {
     }
 
     #[test]
-    fn visual_offset_is_saved_per_device_else_reported_latency() {
-        let device = |uid: &str, latency_ms: u64| DeviceInfo {
+    fn visual_offset_is_saved_per_device_else_the_uncompensated_latency() {
+        // Device latency + safety offset are already in the beat times: a
+        // default counting them again would show beats late.
+        let device = |uid: &str, stream_ms: u64| DeviceInfo {
             uid: uid.to_owned(),
             name: uid.to_owned(),
             sample_rate: 48_000,
-            reported_latency: Duration::from_millis(latency_ms),
+            latency: OutputLatency {
+                device_and_safety: Duration::from_millis(40),
+                stream: Duration::from_millis(stream_ms),
+            },
         };
         let saved = BTreeMap::from([("usb".to_owned(), 7)]);
         assert_eq!(

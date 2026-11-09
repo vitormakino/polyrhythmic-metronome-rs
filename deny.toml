@@ -14,6 +14,7 @@ allow = [
     "MIT",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause", # assert_no_alloc (debug-build RT guard)
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",

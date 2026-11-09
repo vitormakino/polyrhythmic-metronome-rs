@@ -28,7 +28,7 @@ pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
     let font = theme::font_mono(10.0);
     let cy = rect.center().y;
     let mut x = rect.left() + 4.0;
-    let mut status = |ui: &Ui, key: &str, text: &str| {
+    let mut status = |ui: &Ui, key: &str, text: &str, hover: Option<&str>| {
         painter.circle_filled(pos2(x + 3.0, cy), 3.0, ROSE);
         let r = widgets::text(
             &painter,
@@ -41,18 +41,23 @@ pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
         );
         let node = Rect::from_min_max(pos2(x, rect.top()), pos2(r.right(), rect.bottom()));
         let label = text.to_owned();
-        ui.interact(node, ui.make_persistent_id(key), Sense::hover())
-            .widget_info(|| WidgetInfo::labeled(Role::Label, true, &label));
+        let resp = ui.interact(node, ui.make_persistent_id(key), Sense::hover());
+        resp.widget_info(|| WidgetInfo::labeled(Role::Label, true, &label));
+        if let Some(hover) = hover {
+            resp.on_hover_text(hover);
+        }
         x = r.right() + 16.0;
     };
     if state.device_name.is_none() {
-        status(ui, "no-output", "sem saída de áudio");
+        let error = state.audio_error.as_deref();
+        status(ui, "no-output", "sem saída de áudio", error);
     }
     if state.underruns > 0 {
         status(
             ui,
             "underruns",
             &format!("Falhas de áudio: {}", state.underruns),
+            None,
         );
     }
 

@@ -9,7 +9,7 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -19,6 +19,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine::{Engine, EngineHandle, EngineInit};
 use crate::messages::{Command, PositionSnapshot};
+use crate::watch::{self, Observation, RebuildCounts, RebuildReason, WatchState};
 
 // The engine is built on the UI thread and moved into the audio callback.
 const _: () = {
@@ -28,10 +29,6 @@ const _: () = {
 
 /// Buffer size asked for first; the device default is used if refused.
 const PREFERRED_BUFFER: u32 = 512;
-/// A callback gap this long (or a stream silent this long, or a wall clock
-/// that jumped this far past the monotonic one) means the stream must be
-/// rebuilt: the machine slept or the device stalled.
-const STALL: Duration = Duration::from_secs(1);
 /// Pause between attempts to open an output while there is none.
 const RETRY: Duration = Duration::from_secs(1);
 /// Sample rate of the placeholder engine that holds the position while
@@ -45,9 +42,40 @@ pub struct DeviceInfo {
     pub uid: String,
     pub name: String,
     pub sample_rate: u32,
-    /// Device latency + safety offset + output stream latency, as CoreAudio
-    /// reports them (zero if the query failed); see [`query_output_latency`].
-    pub reported_latency: Duration,
+    /// What CoreAudio reports for it (zero if the query failed); see
+    /// [`query_output_latency`].
+    pub latency: OutputLatency,
+}
+
+/// Output latency of a device, as CoreAudio reports it.
+///
+/// cpal 0.18.2 already puts the device's buffer size, `device_and_safety`
+/// and nothing else into `OutputCallbackInfo::timestamp().playback` (see
+/// `cpal::host::coreaudio::macos::device`, `build_output_stream_raw`: the
+/// render callback adds `device_buffer_frames + kAudioDevicePropertyLatency
+/// + kAudioDevicePropertySafetyOffset` to the callback time), and the engine
+/// stamps beat events with that `playback` time. Only `stream` is missing
+/// from the events' times: [`uncompensated`](Self::uncompensated).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OutputLatency {
+    /// `kAudioDevicePropertyLatency` + `kAudioDevicePropertySafetyOffset`
+    /// (output scope).
+    pub device_and_safety: Duration,
+    /// `kAudioStreamPropertyLatency` of the first output stream.
+    pub stream: Duration,
+}
+
+impl OutputLatency {
+    /// Everything CoreAudio reports.
+    pub fn total(&self) -> Duration {
+        self.device_and_safety + self.stream
+    }
+
+    /// The part cpal does not include in `playback`, so beat events come
+    /// this much early: the default visual offset.
+    pub fn uncompensated(&self) -> Duration {
+        self.stream
+    }
 }
 
 /// A stream could not be opened on an existing output device.
@@ -118,6 +146,49 @@ fn new_tap(capacity: usize) -> (TapTx, TapRx) {
     )
 }
 
+/// The first error a stream's error callback reported, as one atomic (the
+/// callback may run on a CoreAudio thread).
+#[derive(Default)]
+struct ErrorSlot(AtomicU8);
+
+/// Error kinds by code - 1 (0 is "no error"). Unknown kinds map to `Other`.
+const KINDS: [ErrorKind; 14] = [
+    ErrorKind::DeviceBusy,
+    ErrorKind::DeviceChanged,
+    ErrorKind::DeviceNotAvailable,
+    ErrorKind::HostUnavailable,
+    ErrorKind::InvalidInput,
+    ErrorKind::PermissionDenied,
+    ErrorKind::RealtimeDenied,
+    ErrorKind::ResourceExhausted,
+    ErrorKind::StreamInvalidated,
+    ErrorKind::UnsupportedConfig,
+    ErrorKind::UnsupportedOperation,
+    ErrorKind::Xrun,
+    ErrorKind::BackendError,
+    ErrorKind::Other,
+];
+
+impl ErrorSlot {
+    /// Keeps `kind` unless an earlier error is already kept.
+    fn set(&self, kind: ErrorKind) {
+        let index = KINDS
+            .iter()
+            .position(|&k| k == kind)
+            .unwrap_or(KINDS.len() - 1);
+        let _ = self
+            .0
+            .compare_exchange(0, index as u8 + 1, Ordering::Relaxed, Ordering::Relaxed);
+    }
+
+    fn get(&self) -> Option<ErrorKind> {
+        match self.0.load(Ordering::Relaxed) {
+            0 => None,
+            code => KINDS.get(usize::from(code) - 1).copied(),
+        }
+    }
+}
+
 /// What the UI asked the engine to play: the latest BPM, pattern and
 /// play/stop sent. A rebuilt engine starts from it.
 #[derive(Clone, Debug)]
@@ -181,6 +252,12 @@ pub struct AudioService {
     /// Ring size (samples) of the output tap, if one was asked for.
     tap_capacity: Option<usize>,
     rebuilds: u64,
+    /// Why the stream was last replaced or dropped, and how often for each
+    /// reason.
+    last_reason: Option<RebuildReason>,
+    reasons: RebuildCounts,
+    /// Why the last attempt to open a stream failed, until one succeeds.
+    last_error: Option<AudioError>,
     next_attempt: Instant,
     /// Monotonic and wall clock at the last tick, to notice sleep.
     clocks: (Instant, SystemTime),
@@ -193,12 +270,12 @@ struct Live {
     halted: Arc<AtomicBool>,
     info: DeviceInfo,
     tap: Option<TapRx>,
-    /// Set by the error callback or the data callback: rebuild.
-    failed: Arc<AtomicBool>,
+    /// Set by the error callback: rebuild.
+    error: Arc<ErrorSlot>,
     /// Data callbacks so far.
     callbacks: Arc<AtomicU64>,
-    /// `callbacks` at the last tick, and when it last moved.
-    seen: (u64, Instant),
+    /// What `tick` remembers about this stream.
+    watch: WatchState,
 }
 
 impl AudioService {
@@ -231,9 +308,14 @@ impl AudioService {
         let host = cpal::default_host();
         let transport = Transport::new(&init);
         let now = Instant::now();
+        let mut last_error = None;
         let (live, handle) = match open(&host, &init, tap_capacity) {
             Ok(Some((live, handle))) => (Some(live), handle),
-            Ok(None) | Err(OpenError::Transient) => (None, placeholder(&init)),
+            Ok(None) => (None, placeholder(&init)),
+            Err(OpenError::Transient(e)) => {
+                last_error = Some(AudioError(e));
+                (None, placeholder(&init))
+            }
             Err(OpenError::Fatal(e)) => return Err(AudioError(e)),
         };
         Ok(AudioService {
@@ -244,6 +326,9 @@ impl AudioService {
             live,
             tap_capacity,
             rebuilds: 0,
+            last_reason: None,
+            reasons: RebuildCounts::default(),
+            last_error,
             next_attempt: now + RETRY,
             clocks: (now, SystemTime::now()),
         })
@@ -283,6 +368,24 @@ impl AudioService {
         self.rebuilds
     }
 
+    /// Why `tick` last replaced or dropped the stream (or tried to open one
+    /// after there was none), whether or not the new stream opened.
+    pub fn last_rebuild_reason(&self) -> Option<&RebuildReason> {
+        self.last_reason.as_ref()
+    }
+
+    /// How often `tick` decided to rebuild, by reason. Its
+    /// [`total`](RebuildCounts::total) can exceed [`rebuilds`](Self::rebuilds):
+    /// it also counts attempts that found no device or failed to open.
+    pub fn rebuild_reasons(&self) -> RebuildCounts {
+        self.reasons
+    }
+
+    /// Why the last attempt to open a stream failed; `None` once one opens.
+    pub fn last_error(&self) -> Option<&AudioError> {
+        self.last_error.as_ref()
+    }
+
     /// The output in use, or `None` when there is none ("sem saída de
     /// áudio").
     pub fn device_info(&self) -> Option<DeviceInfo> {
@@ -293,14 +396,15 @@ impl AudioService {
     /// patterns from `garbage` (the UI should drain it every frame too: a
     /// parked `SetPattern` delays every later command, including `Stop`),
     /// and rebuilds the stream when the default output changed, the stream
-    /// failed or stalled, or the machine slept; with no output it retries.
+    /// failed or stalled, or the machine slept (see the `watch` module for
+    /// how each is confirmed first); with no output it retries.
     pub fn tick(&mut self) {
         while self.handle.garbage.pop().is_ok() {}
         let now = Instant::now();
         let wall = SystemTime::now();
-        let slept = wall
+        let wall_jumped = wall
             .duration_since(self.clocks.1)
-            .is_ok_and(|w| w > now.duration_since(self.clocks.0) + STALL);
+            .is_ok_and(|w| w > now.duration_since(self.clocks.0) + watch::STALL);
         self.clocks = (now, wall);
 
         let default_uid = self
@@ -308,22 +412,28 @@ impl AudioService {
             .default_output_device()
             .and_then(|d| d.id().ok())
             .map(|id| id.id().to_owned());
-        let rebuild = match &mut self.live {
-            Some(live) => {
-                let count = live.callbacks.load(Ordering::Relaxed);
-                if count != live.seen.0 {
-                    live.seen = (count, now);
+        let reason = match &mut self.live {
+            Some(live) => watch::rebuild_reason(
+                &mut live.watch,
+                Observation {
+                    now,
+                    wall_jumped,
+                    callbacks: live.callbacks.load(Ordering::Relaxed),
+                    error: live.error.get(),
+                    uid: &live.info.uid,
+                    default_uid,
+                },
+            ),
+            None => default_uid.filter(|_| now >= self.next_attempt).map(|to| {
+                RebuildReason::DeviceChanged {
+                    from: None,
+                    to: Some(to),
                 }
-                // Silent only counts once the stream has run.
-                let stalled = count > 0 && now.duration_since(live.seen.1) > STALL;
-                slept
-                    || stalled
-                    || live.failed.load(Ordering::Relaxed)
-                    || default_uid.as_deref() != Some(live.info.uid.as_str())
-            }
-            None => default_uid.is_some() && now >= self.next_attempt,
+            }),
         };
-        if rebuild {
+        if let Some(reason) = reason {
+            self.reasons.count(&reason);
+            self.last_reason = Some(reason);
             self.rebuild(now);
         }
     }
@@ -352,10 +462,16 @@ impl AudioService {
         }
         let init = self.transport.resume_init(snapshot);
         self.next_attempt = now + RETRY;
-        let Ok(Some((live, handle))) = open(&self.host, &init, self.tap_capacity) else {
+        let (live, handle) = match open(&self.host, &init, self.tap_capacity) {
+            Ok(Some(opened)) => opened,
             // Keep the old handle: its position stays the last one played.
-            return;
+            Ok(None) => return,
+            Err(OpenError::Transient(e) | OpenError::Fatal(e)) => {
+                self.last_error = Some(AudioError(e));
+                return;
+            }
         };
+        self.last_error = None;
         let old = std::mem::replace(&mut self.handle, handle);
         for (new, old) in [
             (&self.handle.underruns, &old.underruns),
@@ -377,7 +493,7 @@ fn placeholder(init: &EngineInit) -> EngineHandle {
 
 enum OpenError {
     /// Worth retrying (device busy, gone, invalidated...).
-    Transient,
+    Transient(cpal::Error),
     Fatal(cpal::Error),
 }
 
@@ -389,7 +505,7 @@ impl From<cpal::Error> for OpenError {
             | ErrorKind::PermissionDenied
             | ErrorKind::InvalidInput
             | ErrorKind::HostUnavailable => OpenError::Fatal(e),
-            _ => OpenError::Transient,
+            _ => OpenError::Transient(e),
         }
     }
 }
@@ -419,7 +535,7 @@ fn open(
     if fixed_fits {
         sizes.insert(0, BufferSize::Fixed(PREFERRED_BUFFER));
     }
-    let failed = Arc::new(AtomicBool::new(false));
+    let error = Arc::new(ErrorSlot::default());
     let callbacks = Arc::new(AtomicU64::new(0));
     let halted = Arc::new(AtomicBool::new(false));
     let mut last_error = None;
@@ -440,14 +556,13 @@ fn open(
             sample_rate: u64::from(sample_rate.max(1)),
             last: None,
             underruns: Arc::clone(&handle.underruns),
-            failed: Arc::clone(&failed),
             callbacks: Arc::clone(&callbacks),
             halted: Arc::clone(&halted),
             tap: tap_tx,
         };
         let on_error = {
             let underruns = Arc::clone(&handle.underruns);
-            let failed = Arc::clone(&failed);
+            let error = Arc::clone(&error);
             move |e: cpal::Error| match e.kind() {
                 ErrorKind::Xrun => {
                     underruns.fetch_add(1, Ordering::Relaxed);
@@ -455,7 +570,7 @@ fn open(
                 // The default-output unit rerouted by itself; `tick` sees the
                 // new device and rebuilds at its sample rate.
                 ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied => {}
-                _ => failed.store(true, Ordering::Relaxed),
+                kind => error.set(kind),
             }
         };
         match device.build_output_stream::<f32, _, _>(
@@ -467,7 +582,7 @@ fn open(
             Ok(stream) => {
                 stream.play()?;
                 let info = DeviceInfo {
-                    reported_latency: query_output_latency(&uid).unwrap_or_default(),
+                    latency: query_output_latency(&uid).unwrap_or_default(),
                     uid,
                     name,
                     sample_rate,
@@ -477,9 +592,9 @@ fn open(
                     halted,
                     info,
                     tap: tap_rx,
-                    failed,
+                    error,
                     callbacks,
-                    seen: (0, Instant::now()),
+                    watch: WatchState::new(Instant::now()),
                 };
                 return Ok(Some((live, handle)));
             }
@@ -500,7 +615,6 @@ struct Callback {
     /// Time and length (frames) of the previous callback.
     last: Option<(StreamInstant, u64)>,
     underruns: Arc<AtomicU64>,
-    failed: Arc<AtomicBool>,
     callbacks: Arc<AtomicU64>,
     /// Set when the service replaces this stream: output silence, render
     /// nothing, so the engine's position stays where the snapshot read it.
@@ -510,20 +624,30 @@ struct Callback {
 }
 
 impl Callback {
-    /// Renders `data`. Only atomics and the engine: no allocation or lock.
+    /// Renders `data`. Only atomics and the engine: no allocation or lock;
+    /// debug builds abort on an allocation (with `AllocDisabler` as the
+    /// global allocator, as the app and `tools/stress` install it).
     fn run(&mut self, data: &mut [f32], info: &OutputCallbackInfo) {
+        #[cfg(debug_assertions)]
+        assert_no_alloc::assert_no_alloc(|| self.render(data, info));
+        #[cfg(not(debug_assertions))]
+        self.render(data, info);
+    }
+
+    fn render(&mut self, data: &mut [f32], info: &OutputCallbackInfo) {
         if self.halted.load(Ordering::Acquire) {
             data.fill(0.0);
             return;
         }
         let ts = info.timestamp();
         let frames = (data.len() / self.channels) as u64;
+        // Counts late callbacks only. A stall is the service's business: it
+        // watches `callbacks`, which does not depend on CoreAudio's host
+        // time (a bogus `mHostTime` would fake a gap here).
         if let Some((prev, prev_frames)) = self.last {
             let gap = ts.callback.duration_since(prev);
             let expected = Duration::from_nanos(prev_frames * 1_000_000_000 / self.sample_rate);
-            if gap > STALL {
-                self.failed.store(true, Ordering::Relaxed);
-            } else if gap > expected * 3 / 2 {
+            if gap > expected * 3 / 2 {
                 self.underruns.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -539,10 +663,10 @@ impl Callback {
 
 /// Output latency of the device with CoreAudio UID `device_uid`:
 /// `kAudioDevicePropertyLatency` + `kAudioDevicePropertySafetyOffset` (output
-/// scope) + `kAudioStreamPropertyLatency` of its first output stream, in
+/// scope) and `kAudioStreamPropertyLatency` of its first output stream, in
 /// frames at the device's nominal sample rate. `None` if the device is not
 /// found or a query fails. The only `unsafe` code in the workspace.
-pub fn query_output_latency(device_uid: &str) -> Option<Duration> {
+pub fn query_output_latency(device_uid: &str) -> Option<OutputLatency> {
     use std::ffi::c_void;
     use std::ptr::{self, NonNull};
 
@@ -652,8 +776,11 @@ pub fn query_output_latency(device_uid: &str) -> Option<Duration> {
     if n != size_of::<f64>() as u32 || !rate.is_finite() || rate <= 0.0 {
         return None;
     }
-    let frames = f64::from(device_latency) + f64::from(safety_offset) + f64::from(stream_latency);
-    Some(Duration::from_secs_f64(frames / rate))
+    let seconds = |frames: f64| Duration::from_secs_f64(frames / rate);
+    Some(OutputLatency {
+        device_and_safety: seconds(f64::from(device_latency) + f64::from(safety_offset)),
+        stream: seconds(f64::from(stream_latency)),
+    })
 }
 
 #[cfg(test)]
@@ -674,7 +801,8 @@ mod tests {
     }
 
     /// 480 stereo frames at 48 kHz are 10 ms: a 14 ms gap is fine, a 16 ms
-    /// one an underrun, a gap over a second a stall. All without allocating.
+    /// one an underrun, and so is a gap over a second (stalls are the
+    /// service's `callbacks` watchdog, not this). All without allocating.
     #[test]
     fn callback_counts_gaps_and_never_allocates() {
         let init = EngineInit {
@@ -691,7 +819,6 @@ mod tests {
             sample_rate: 48_000,
             last: None,
             underruns: Arc::clone(&handle.underruns),
-            failed: Arc::new(AtomicBool::new(false)),
             callbacks: Arc::new(AtomicU64::new(0)),
             halted: Arc::new(AtomicBool::new(false)),
             tap: Some(tap_tx),
@@ -706,9 +833,8 @@ mod tests {
         assert_eq!(underruns(), 0);
         assert_no_alloc::assert_no_alloc(|| cb.run(&mut out, &at(50)));
         assert_eq!(underruns(), 1);
-        assert!(!cb.failed.load(Ordering::Relaxed));
         assert_no_alloc::assert_no_alloc(|| cb.run(&mut out, &at(1_100)));
-        assert!(cb.failed.load(Ordering::Relaxed), "a gap over 1 s rebuilds");
+        assert_eq!(underruns(), 2, "a long gap is just late");
         assert_eq!(cb.callbacks.load(Ordering::Relaxed), 6);
         let events = std::iter::from_fn(|| handle.events.pop().ok()).count();
         assert!(events > 0, "the engine rendered clicks");
@@ -736,5 +862,19 @@ mod tests {
         assert!(out.iter().all(|&x| x == 0.0));
         assert_eq!(handle.position.snapshot().frame, frame);
         assert_eq!(cb.callbacks.load(Ordering::Relaxed), 7);
+    }
+
+    #[test]
+    fn error_slot_keeps_the_first_kind() {
+        let slot = ErrorSlot::default();
+        assert_eq!(slot.get(), None);
+        for kind in KINDS {
+            let one = ErrorSlot::default();
+            one.set(kind);
+            assert_eq!(one.get(), Some(kind));
+        }
+        slot.set(ErrorKind::StreamInvalidated);
+        slot.set(ErrorKind::DeviceNotAvailable);
+        assert_eq!(slot.get(), Some(ErrorKind::StreamInvalidated));
     }
 }
