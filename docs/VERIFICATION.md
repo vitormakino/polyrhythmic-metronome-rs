@@ -195,3 +195,88 @@ another app already holds one, the terminal shows
     wake-up comes a little early).
 
 Record the result here: date, macOS version, what differed.
+
+## Task 15: stress harness
+
+`tools/stress` runs the real `AudioService` (7 against 11 at 300 BPM, both
+wood blocks, playing from frame 0) while N busy threads at normal priority
+burn the CPU and touch 8 MiB of memory each. The audio callback copies what it
+rendered (first channel) into a preallocated ring (an optional "tap", off in
+the app), the harness writes it to a WAV and then:
+
+1. builds the expected signal from the `Timeline` grid and the `SampleBank`
+   clips, with no engine in between;
+2. finds the sounds in both with the same detector (a sample at or above 0.01
+   after at least 10 ms of quieter samples starts a sound);
+3. pairs them, removes the first-onset offset, and reports the largest
+   deviation in frames, the sound counts and the underruns.
+
+Sounds that overlap (clicks closer than the clip length) form one sound, so
+the count is of sounds, not of beats.
+
+Pass: every sound found, max deviation 0 frames, no tap frames dropped, no
+stream rebuild (either would void the recording). Underruns are reported and
+printed with the verdict; the grid must stay exact whatever they are.
+
+```
+cargo run -p stress --release -- --minutes 2 --load <cores> --out stress.wav
+```
+
+### 2-minute run, 12 load threads
+
+Status: PASS (2026-11-09, an Apple Silicon Mac, 12 cores, output a
+USB audio interface at 44100 Hz; nothing else deliberately running).
+The agent ran it (audible on the interface).
+
+```
+2 min, 12 load threads, 7:11 at 300 BPM on a USB audio interface at 44100 Hz
+wrote stress.wav (5292032 frames)
+expected clicks (sounds): 943
+detected clicks (sounds): 943
+matched to the grid:      943
+first-onset offset:       0 frames
+max deviation:            0 frames
+underruns:                0
+stream rebuilds:          0
+tap frames dropped:       0
+PASS
+```
+
+Whether the run sounded even was not judged (the agent cannot hear it).
+
+### 10-minute run with a browser playing video
+
+Status: PENDING (owner). Needs a person to start the video.
+
+1. Open a browser and play a video (1080p or higher, full screen on a second
+   display if there is one). Leave it playing.
+2. Run (replace 12 with the number of cores, `sysctl -n hw.ncpu`):
+
+   ```
+   cargo run -p stress --release -- --minutes 10 --load <cores> --out stress.wav
+   ```
+3. Pass: `PASS`, max deviation 0 frames, same sound counts. Note the underruns
+   and whether you heard any glitch. Listening to `stress.wav` is optional;
+   it is the callback's own output.
+
+Record the result here: date, machine, numbers.
+
+### Unplug every output, sleep and wake
+
+Status: PENDING (owner). The agent cannot unplug hardware or sleep the Mac.
+
+With the app playing (`cargo run --release -p polyrhythmic-metronome-app`):
+
+1. Unplug or disconnect every audio output, including the built-in one if the
+   Mac allows it (Bluetooth off, USB interface out, headphones out; on a
+   laptop the built-in speakers stay, so this part needs a Mac mini or an
+   external-only setup). Expected: the footer shows "sem saída de áudio" with
+   a red dot and the app keeps running.
+2. Plug an output back in. Expected: playing resumes within about a second
+   with the bar position continuous; the footer shows the device name.
+3. While playing, put the Mac to sleep (Apple menu > Sleep) and wake it after
+   a few seconds. Expected: the app is still there, the stream is rebuilt
+   within about a second of waking and the clicks resume without a burst of
+   old flashes; no crash.
+
+Record the result here: date, macOS version, outputs used, what differed.

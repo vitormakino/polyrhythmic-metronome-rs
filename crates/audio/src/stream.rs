@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, ErrorKind, OutputCallbackInfo, StreamConfig, StreamInstant};
 use pm_core::{Bpm, MusicalPosition, Pattern};
+use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine::{Engine, EngineHandle, EngineInit};
 use crate::messages::{Command, PositionSnapshot};
@@ -63,6 +64,58 @@ impl std::error::Error for AudioError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.0)
     }
+}
+
+/// Consumer end of the output tap: a copy of what the data callback
+/// rendered (first channel of each frame), for tools that analyse the real
+/// output, such as `tools/stress`. See [`AudioService::start_with_tap`].
+pub struct TapRx {
+    /// Rendered samples, starting at the engine's frame 0.
+    pub samples: Consumer<f32>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl TapRx {
+    /// Frames the callback could not copy because the ring was full. Not
+    /// zero means `samples` has gaps and cannot be aligned to engine frames.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+}
+
+/// Producer end, in the data callback: preallocated, never allocates.
+struct TapTx {
+    samples: Producer<f32>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl TapTx {
+    fn push(&mut self, data: &[f32], channels: usize) {
+        let frames = data.len() / channels;
+        match self.samples.write_chunk_uninit(frames) {
+            Ok(chunk) => {
+                chunk.fill_from_iter(data.chunks_exact(channels).map(|frame| frame[0]));
+            }
+            Err(_) => {
+                self.dropped.fetch_add(frames as u64, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+fn new_tap(capacity: usize) -> (TapTx, TapRx) {
+    let (samples, consumer) = RingBuffer::new(capacity);
+    let dropped = Arc::new(AtomicU64::new(0));
+    (
+        TapTx {
+            samples,
+            dropped: Arc::clone(&dropped),
+        },
+        TapRx {
+            samples: consumer,
+            dropped,
+        },
+    )
 }
 
 /// What the UI asked the engine to play: the latest BPM, pattern and
@@ -125,6 +178,9 @@ pub struct AudioService {
     /// exact position while it has rendered nothing.
     origin: Option<MusicalPosition>,
     live: Option<Live>,
+    /// Ring size (samples) of the output tap, if one was asked for.
+    tap_capacity: Option<usize>,
+    rebuilds: u64,
     next_attempt: Instant,
     /// Monotonic and wall clock at the last tick, to notice sleep.
     clocks: (Instant, SystemTime),
@@ -136,6 +192,7 @@ struct Live {
     /// Tells the data callback to render nothing more (set before a rebuild).
     halted: Arc<AtomicBool>,
     info: DeviceInfo,
+    tap: Option<TapRx>,
     /// Set by the error callback or the data callback: rebuild.
     failed: Arc<AtomicBool>,
     /// Data callbacks so far.
@@ -150,10 +207,31 @@ impl AudioService {
     /// keeps trying and [`device_info`](Self::device_info) is `None`. Fails
     /// only if a present device refuses every stream configuration.
     pub fn start(init: EngineInit) -> Result<AudioService, AudioError> {
+        Self::start_inner(init, None)
+    }
+
+    /// Like [`start`](Self::start), and the data callback also copies the
+    /// first channel of everything it renders into a preallocated ring of
+    /// `tap_samples` samples, read through [`tap`](Self::tap). Meant for
+    /// measurement tools: the ring is allocated here, the callback only
+    /// writes into it, and a full ring counts the lost frames instead of
+    /// blocking. A rebuilt stream gets a fresh ring (see
+    /// [`rebuilds`](Self::rebuilds)).
+    pub fn start_with_tap(
+        init: EngineInit,
+        tap_samples: usize,
+    ) -> Result<AudioService, AudioError> {
+        Self::start_inner(init, Some(tap_samples))
+    }
+
+    fn start_inner(
+        init: EngineInit,
+        tap_capacity: Option<usize>,
+    ) -> Result<AudioService, AudioError> {
         let host = cpal::default_host();
         let transport = Transport::new(&init);
         let now = Instant::now();
-        let (live, handle) = match open(&host, &init) {
+        let (live, handle) = match open(&host, &init, tap_capacity) {
             Ok(Some((live, handle))) => (Some(live), handle),
             Ok(None) | Err(OpenError::Transient) => (None, placeholder(&init)),
             Err(OpenError::Fatal(e)) => return Err(AudioError(e)),
@@ -164,6 +242,8 @@ impl AudioService {
             handle,
             origin: init.resume,
             live,
+            tap_capacity,
+            rebuilds: 0,
             next_attempt: now + RETRY,
             clocks: (now, SystemTime::now()),
         })
@@ -190,6 +270,17 @@ impl AudioService {
     /// new handle on every rebuild (counters carry over).
     pub fn handle(&mut self) -> &mut EngineHandle {
         &mut self.handle
+    }
+
+    /// The output tap asked for with [`start_with_tap`](Self::start_with_tap)
+    /// (`None` without one, or while there is no output).
+    pub fn tap(&mut self) -> Option<&mut TapRx> {
+        self.live.as_mut().and_then(|live| live.tap.as_mut())
+    }
+
+    /// Streams opened to replace a previous one so far (each replaces the tap).
+    pub fn rebuilds(&self) -> u64 {
+        self.rebuilds
     }
 
     /// The output in use, or `None` when there is none ("sem saída de
@@ -261,7 +352,7 @@ impl AudioService {
         }
         let init = self.transport.resume_init(snapshot);
         self.next_attempt = now + RETRY;
-        let Ok(Some((live, handle))) = open(&self.host, &init) else {
+        let Ok(Some((live, handle))) = open(&self.host, &init, self.tap_capacity) else {
             // Keep the old handle: its position stays the last one played.
             return;
         };
@@ -273,6 +364,7 @@ impl AudioService {
             new.fetch_add(old.load(Ordering::Relaxed), Ordering::Relaxed);
         }
         self.origin = init.resume;
+        self.rebuilds += 1;
         self.live = Some(live);
     }
 }
@@ -304,7 +396,11 @@ impl From<cpal::Error> for OpenError {
 
 /// Opens a stream for an engine built from `init` on the default output, at
 /// the device's own sample rate. `Ok(None)`: there is no output device.
-fn open(host: &cpal::Host, init: &EngineInit) -> Result<Option<(Live, EngineHandle)>, OpenError> {
+fn open(
+    host: &cpal::Host,
+    init: &EngineInit,
+    tap_capacity: Option<usize>,
+) -> Result<Option<(Live, EngineHandle)>, OpenError> {
     let Some(device) = host.default_output_device() else {
         return Ok(None);
     };
@@ -334,6 +430,10 @@ fn open(host: &cpal::Host, init: &EngineInit) -> Result<Option<(Live, EngineHand
             buffer_size,
         };
         let (engine, handle) = Engine::new(sample_rate, channels, init.clone());
+        let (tap_tx, tap_rx) = match tap_capacity.map(new_tap) {
+            Some((tx, rx)) => (Some(tx), Some(rx)),
+            None => (None, None),
+        };
         let mut callback = Callback {
             engine,
             channels: usize::from(channels.max(1)),
@@ -343,6 +443,7 @@ fn open(host: &cpal::Host, init: &EngineInit) -> Result<Option<(Live, EngineHand
             failed: Arc::clone(&failed),
             callbacks: Arc::clone(&callbacks),
             halted: Arc::clone(&halted),
+            tap: tap_tx,
         };
         let on_error = {
             let underruns = Arc::clone(&handle.underruns);
@@ -375,6 +476,7 @@ fn open(host: &cpal::Host, init: &EngineInit) -> Result<Option<(Live, EngineHand
                     stream,
                     halted,
                     info,
+                    tap: tap_rx,
                     failed,
                     callbacks,
                     seen: (0, Instant::now()),
@@ -403,6 +505,8 @@ struct Callback {
     /// Set when the service replaces this stream: output silence, render
     /// nothing, so the engine's position stays where the snapshot read it.
     halted: Arc<AtomicBool>,
+    /// Copy of the output for measurement tools; `None` in normal use.
+    tap: Option<TapTx>,
 }
 
 impl Callback {
@@ -426,6 +530,9 @@ impl Callback {
         self.last = Some((ts.callback, frames));
         self.engine
             .render(data, ts.playback.duration_since(ts.callback));
+        if let Some(tap) = &mut self.tap {
+            tap.push(data, self.channels);
+        }
         self.callbacks.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -576,6 +683,8 @@ mod tests {
             resume: Some(MusicalPosition::start_of(0)),
         };
         let (engine, mut handle) = Engine::new(48_000, 2, init);
+        // Room for 6 buffers of 480 frames; the 7th is counted as dropped.
+        let (tap_tx, mut tap_rx) = new_tap(2_880);
         let mut cb = Callback {
             engine,
             channels: 2,
@@ -585,6 +694,7 @@ mod tests {
             failed: Arc::new(AtomicBool::new(false)),
             callbacks: Arc::new(AtomicU64::new(0)),
             halted: Arc::new(AtomicBool::new(false)),
+            tap: Some(tap_tx),
         };
         let mut out = [0.0f32; 960];
         let underruns = || handle.underruns.load(Ordering::Relaxed);
@@ -602,6 +712,16 @@ mod tests {
         assert_eq!(cb.callbacks.load(Ordering::Relaxed), 6);
         let events = std::iter::from_fn(|| handle.events.pop().ok()).count();
         assert!(events > 0, "the engine rendered clicks");
+
+        // The tap holds the first channel of each of the 6 rendered buffers,
+        // and nothing was dropped.
+        assert_eq!(tap_rx.dropped(), 0);
+        assert_eq!(tap_rx.samples.slots(), 2_880);
+        let tapped: Vec<f32> = std::iter::from_fn(|| tap_rx.samples.pop().ok()).collect();
+        assert!(
+            tapped.iter().any(|&x| x != 0.0),
+            "the tap carries the clicks"
+        );
 
         // Halted for a rebuild: silence, and the position does not move.
         let frame = handle.position.snapshot().frame;

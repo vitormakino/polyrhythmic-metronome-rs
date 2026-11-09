@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/audio", "crates/ui", "crates/app"]
+members = ["crates/core", "crates/audio", "crates/ui", "crates/app", "tools/stress"]
+# The stress harness is opt-in (`cargo run -p stress`).
+default-members = ["crates/core", "crates/audio", "crates/ui", "crates/app"]
 
 [workspace.package]
 version = "0.1.0"

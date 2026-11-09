@@ -1,0 +1,16 @@
+[package]
+name = "stress"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Opt-in stress harness: records the real audio callback under CPU load and measures click timing."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+polyrhythmic-metronome-core = { path = "../../crates/core" }
+polyrhythmic-metronome-audio = { path = "../../crates/audio" }
