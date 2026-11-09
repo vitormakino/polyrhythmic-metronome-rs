@@ -157,10 +157,7 @@ mod tests {
             full_rect: Some([10.0, 20.0, 900.0, 700.0]),
             mini_rect: Some([1200.0, 40.0, 260.0, 300.0]),
             visual_offsets: BTreeMap::from([
-                (
-                    "ExampleUSBInterface:1,2".to_owned(),
-                    12,
-                ),
+                ("ExampleUSBInterface:1,2".to_owned(), 12),
                 ("BuiltInSpeakerDevice".to_owned(), 0),
             ]),
         }
