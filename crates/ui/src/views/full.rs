@@ -15,6 +15,7 @@ use egui::{
 use pm_core::MAX_PULSES;
 
 use super::bpm_card::bpm_card;
+use super::footer::{self, footer};
 use super::pulse_card::{Grid, pulse_list};
 use super::topology::topology;
 use super::widgets;
@@ -51,6 +52,7 @@ pub fn full_view(ui: &mut Ui, state: &mut UiState, now: Instant) -> Vec<UiAction
     }
     pulse_list(ui, layout.list, &grid, state, &mut actions);
     play_button(ui, layout.play, state, layout.wide, &mut actions);
+    footer(ui, layout.footer, state, &mut actions);
     actions
 }
 
@@ -63,6 +65,7 @@ struct Layout {
     header: Rect,
     list: Rect,
     play: Rect,
+    footer: Rect,
 }
 
 fn row(top: f32, height: f32, left: f32, right: f32) -> Rect {
@@ -78,6 +81,14 @@ impl Layout {
             let extra = content.width() - MAX_CONTENT_WIDTH;
             content = content.shrink2(vec2(extra / 2.0, 0.0));
         }
+        // The footer sits in the lower half of the bottom padding.
+        let footer = row(
+            screen.bottom() - pad / 2.0 - footer::HEIGHT,
+            footer::HEIGHT,
+            content.left(),
+            content.right(),
+        );
+        content.max.y = footer.top() - 6.0;
         let (l, r) = (content.left(), content.right());
         if wide {
             let top = row(content.top(), 32.0, l, r);
@@ -104,6 +115,7 @@ impl Layout {
                 header,
                 list,
                 play,
+                footer,
             }
         } else {
             let top = row(content.top(), 24.0, l, r);
@@ -129,6 +141,7 @@ impl Layout {
                 header,
                 list,
                 play,
+                footer,
             }
         }
     }
@@ -153,20 +166,7 @@ fn top_bar(ui: &Ui, rect: Rect, state: &UiState, wide: bool) {
         theme::TEXT,
         0.0,
     );
-    let mut right = rect.right();
-    if state.underruns > 0 {
-        let text = format!("{} underruns", state.underruns);
-        let r = widgets::text(
-            &painter,
-            pos2(right, cy),
-            Align2::RIGHT_CENTER,
-            &text,
-            theme::font_mono(10.0),
-            theme::PALETTE[4],
-            0.0,
-        );
-        right = r.left() - 10.0;
-    }
+    let right = rect.right();
     if let Some(name) = &state.device_name {
         let max = right - title.right() - 16.0;
         if max > 24.0 {

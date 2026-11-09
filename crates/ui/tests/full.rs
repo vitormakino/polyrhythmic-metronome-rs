@@ -323,6 +323,8 @@ fn no_overlap_at_minimum_size() {
         "Play",
         "Fixar mini",
         "Topologia rítmica",
+        "Configurações",
+        "sem saída de áudio",
     ];
     let rects: Vec<_> = labels
         .iter()
@@ -335,6 +337,49 @@ fn no_overlap_at_minimum_size() {
             assert!(!ra.intersects(*rb), "{a} {ra:?} overlaps {b} {rb:?}");
         }
     }
+}
+
+#[test]
+fn footer_shows_output_state_and_underruns() {
+    let mut h = harness(MIN, UiState::default());
+    assert!(h.query_by_label("sem saída de áudio").is_some());
+    assert!(
+        h.query_by_label_contains("Falhas de áudio").is_none(),
+        "hidden while there are none"
+    );
+
+    let mut state = UiState::default();
+    state.device_name = Some("USB Audio Interface".to_owned());
+    state.underruns = 3;
+    h = harness(MIN, state);
+    assert!(h.query_by_label("sem saída de áudio").is_none());
+    assert!(h.query_by_label("Falhas de áudio: 3").is_some());
+}
+
+#[test]
+fn settings_popover_sets_visual_offset() {
+    let mut h = harness(MEDIUM, UiState::default());
+    assert!(
+        h.query_by_label("Offset visual (ms)").is_none(),
+        "closed at first"
+    );
+    click(&mut h, "Configurações");
+    h.get_by_label("Offset visual (ms)")
+        .set_value_accesskit(37.0);
+    h.run();
+    assert_eq!(h.state().ui.visual_offset, Duration::from_millis(37));
+    assert_eq!(
+        h.state().actions.last(),
+        Some(&UiAction::SetVisualOffset(Duration::from_millis(37)))
+    );
+    // Clamped to the slider's range.
+    h.get_by_label("Offset visual (ms)")
+        .set_value_accesskit(9000.0);
+    h.run();
+    assert_eq!(h.state().ui.visual_offset, Duration::from_millis(500));
+    // The gear closes it again.
+    click(&mut h, "Configurações");
+    assert!(h.query_by_label("Offset visual (ms)").is_none());
 }
 
 /// 6 pulses of 17, 23, 4, 5, 6, 32 beats.
