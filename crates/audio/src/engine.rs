@@ -466,9 +466,10 @@ fn play(voice: &mut Voice, clip: &[f32], mix: &mut [f32]) {
     }
 }
 
-/// Unity below the knee, then a tanh bend: continuous, slope 1 at the knee,
+/// The output soft clipper (public so tools can reproduce the engine's
+/// output exactly). Unity below the knee, then a tanh bend: continuous, slope 1 at the knee,
 /// never above 1.0.
-fn soft_clip(x: f32) -> f32 {
+pub fn soft_clip(x: f32) -> f32 {
     let a = x.abs();
     if a <= KNEE {
         return x;

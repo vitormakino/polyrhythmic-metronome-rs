@@ -58,7 +58,7 @@ Quit. Closing the window leaves the metronome playing from the menu bar.
 ## Verification
 
 Timing is checked by automated tests (`cargo test --workspace`), by the stress
-harness (`cargo run -p stress --release -- --minutes 10 --load 12`, which
+harness (`cargo run -p stress --release -- --minutes 10 --load <number of cores>`, which
 records the real audio callback under CPU load and measures every click
 against the timeline), and by manual checks that need hardware. Procedures
 and results are in [docs/VERIFICATION.md](docs/VERIFICATION.md).

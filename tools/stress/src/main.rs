@@ -7,9 +7,9 @@
 //! cargo run -p stress --release -- --minutes 10 --load 12
 //! ```
 //!
-//! Exit status 0 only if every click is on the grid (max deviation 0
-//! frames), no frame of the recording was lost, and the stream was not
-//! rebuilt.
+//! Exit status 0 only if the recording equals the offline reference render
+//! sample for sample (so every click, merged or not, is on the grid), no
+//! frame of the recording was lost, and the stream was not rebuilt.
 
 mod analysis;
 mod onset;
@@ -160,30 +160,41 @@ fn run(args: &Args) -> Result<bool, String> {
 
     let report = analysis::analyse(&samples, sr, bpm, &pattern);
     println!("wrote {} ({} frames)", args.out, samples.len());
-    println!("expected clicks (sounds): {}", report.expected);
-    println!("detected clicks (sounds): {}", report.detected);
-    println!("matched to the grid:      {}", report.matched);
-    println!("first-onset offset:       {} frames", report.shift);
-    println!("max deviation:            {} frames", report.max_deviation);
+    println!(
+        "clicks on the grid:       {} ({} inside another click's sound)",
+        report.hits, report.merged_hits
+    );
+    println!(
+        "sounds expected/detected: {} / {} (matched {})",
+        report.expected, report.detected, report.matched
+    );
+    println!(
+        "first-onset offset:       {} frames (must be 0)",
+        report.shift
+    );
+    println!("max onset deviation:      {} frames", report.max_deviation);
+    println!(
+        "samples vs reference:     {} compared, {} differ by more than {:e}, max difference {:e}",
+        report.samples,
+        report.differing_samples,
+        analysis::TOLERANCE,
+        report.max_sample_diff
+    );
     println!("underruns:                {underruns}");
     println!("stream rebuilds:          {rebuilds}");
     println!("tap frames dropped:       {dropped}");
-    let pass = report.is_exact() && underruns == 0 && rebuilds == 0 && dropped == 0;
-    // An underrun alone is reported, but the pass rule is about the grid:
-    // see docs/VERIFICATION.md. Dropped tap frames or a rebuild void the run.
+    // Dropped tap frames or a rebuild void the recording.
     let valid = rebuilds == 0 && dropped == 0;
-    println!(
-        "{}",
-        if pass {
-            "PASS"
-        } else if !valid {
-            "INVALID (recording is not contiguous)"
-        } else if report.is_exact() {
-            "PASS (grid exact) with underruns"
-        } else {
-            "FAIL"
-        }
-    );
+    let verdict = if !valid {
+        "INVALID (recording is not contiguous)"
+    } else if !report.is_exact() {
+        "FAIL"
+    } else if underruns > 0 {
+        "PASS (output exact) BUT UNDERRUNS OCCURRED: not glitch-free"
+    } else {
+        "PASS"
+    };
+    println!("{verdict}");
     Ok(valid && report.is_exact())
 }
 

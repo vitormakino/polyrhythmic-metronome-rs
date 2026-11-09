@@ -683,7 +683,7 @@ mod tests {
             resume: Some(MusicalPosition::start_of(0)),
         };
         let (engine, mut handle) = Engine::new(48_000, 2, init);
-        // Room for 6 buffers of 480 frames; the 7th is counted as dropped.
+        // Room for exactly 6 buffers of 480 frames.
         let (tap_tx, mut tap_rx) = new_tap(2_880);
         let mut cb = Callback {
             engine,
@@ -714,8 +714,13 @@ mod tests {
         assert!(events > 0, "the engine rendered clicks");
 
         // The tap holds the first channel of each of the 6 rendered buffers,
-        // and nothing was dropped.
+        // and nothing was dropped yet.
         assert_eq!(tap_rx.dropped(), 0);
+        assert_eq!(tap_rx.samples.slots(), 2_880);
+        // The ring is full: the next buffer is counted, not written, and the
+        // callback still neither allocates nor blocks.
+        assert_no_alloc::assert_no_alloc(|| cb.run(&mut out, &at(1_110)));
+        assert_eq!(tap_rx.dropped(), 480);
         assert_eq!(tap_rx.samples.slots(), 2_880);
         let tapped: Vec<f32> = std::iter::from_fn(|| tap_rx.samples.pop().ok()).collect();
         assert!(
@@ -727,9 +732,9 @@ mod tests {
         let frame = handle.position.snapshot().frame;
         cb.halted.store(true, Ordering::Release);
         out.fill(1.0);
-        assert_no_alloc::assert_no_alloc(|| cb.run(&mut out, &at(1_110)));
+        assert_no_alloc::assert_no_alloc(|| cb.run(&mut out, &at(1_120)));
         assert!(out.iter().all(|&x| x == 0.0));
         assert_eq!(handle.position.snapshot().frame, frame);
-        assert_eq!(cb.callbacks.load(Ordering::Relaxed), 6);
+        assert_eq!(cb.callbacks.load(Ordering::Relaxed), 7);
     }
 }

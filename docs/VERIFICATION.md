@@ -204,19 +204,24 @@ burn the CPU and touch 8 MiB of memory each. The audio callback copies what it
 rendered (first channel) into a preallocated ring (an optional "tap", off in
 the app), the harness writes it to a WAV and then:
 
-1. builds the expected signal from the `Timeline` grid and the `SampleBank`
-   clips, with no engine in between;
-2. finds the sounds in both with the same detector (a sample at or above 0.01
-   after at least 10 ms of quieter samples starts a sound);
-3. pairs them, removes the first-onset offset, and reports the largest
-   deviation in frames, the sound counts and the underruns.
+1. builds the reference signal from the `Timeline` grid and the `SampleBank`
+   clips (summed, then the engine's soft clip), with no engine in between;
+2. compares the whole recording with it sample by sample. The engine is
+   deterministic, so a click that is early, late, missing or extra anywhere,
+   including one that starts inside another click's sound, changes samples.
+   Differences up to 1e-6 count as equal: the engine sums overlapping voices
+   in slot order and the reference in hit order, which can differ by float
+   rounding (about 1e-8) with three or more overlapping clicks;
+3. also finds the sounds in both with the same detector (a sample at or above
+   0.01 after at least 10 ms of quieter samples starts a sound) and reports
+   the largest onset deviation in frames. This looks only at the leading
+   click of a sound, so it is secondary; the report says how many grid clicks
+   start inside another click's sound.
 
-Sounds that overlap (clicks closer than the clip length) form one sound, so
-the count is of sounds, not of beats.
-
-Pass: every sound found, max deviation 0 frames, no tap frames dropped, no
-stream rebuild (either would void the recording). Underruns are reported and
-printed with the verdict; the grid must stay exact whatever they are.
+Pass: no sample differs by more than 1e-6, first-onset offset 0, the onsets
+agree, no tap frames dropped and no stream rebuild (either would void the
+recording). Underruns are printed; if any occurred the verdict says so and is
+not "glitch-free".
 
 ```
 cargo run -p stress --release -- --minutes 2 --load <cores> --out stress.wav
@@ -231,18 +236,27 @@ The agent ran it (audible on the interface).
 ```
 2 min, 12 load threads, 7:11 at 300 BPM on a USB audio interface at 44100 Hz
 wrote stress.wav (5292032 frames)
-expected clicks (sounds): 943
-detected clicks (sounds): 943
-matched to the grid:      943
-first-onset offset:       0 frames
-max deviation:            0 frames
+clicks on the grid:       1544 (600 inside another click's sound)
+sounds expected/detected: 943 / 943 (matched 943)
+first-onset offset:       0 frames (must be 0)
+max onset deviation:      0 frames
+samples vs reference:     5292032 compared, 0 differ by more than 1e-6, max difference 0e0
 underruns:                0
 stream rebuilds:          0
 tap frames dropped:       0
 PASS
 ```
 
-Whether the run sounded even was not judged (the agent cannot hear it).
+The maximum difference was exactly 0: the recording is bit-identical to the
+reference. Whether the run sounded even was not judged (the agent cannot
+hear it).
+
+Finding: in one of three runs with this build, the stream was rebuilt once
+during the run (`stream rebuilds: 1`, verdict INVALID, 5290496 frames, onset
+deviation 1024 frames afterwards because the new engine's tap restarts).
+Underruns were 0. The cause was not identified (the harness does not record
+which condition in `AudioService::tick` fired). The harness reports such a run
+as INVALID rather than hiding it. Worth watching in the 10-minute run.
 
 ### 10-minute run with a browser playing video
 
