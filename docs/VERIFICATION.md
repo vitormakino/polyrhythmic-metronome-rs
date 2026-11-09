@@ -31,8 +31,10 @@ without committing, then run the command above. During the 60 s:
 1. Start with the built-in speakers (or the current default) as the output.
    Clicks are audible.
 2. Plug in wired headphones. macOS makes them the default output. Expected:
-   clicks continue in the headphones within about 0.5 s (the service checks
-   4 times a second), with the 4-against-3 cycle intact: the next accent
+   clicks continue in the headphones within about 0.75 s (the service checks
+   4 times a second and rebuilds once it sees the new default output on two
+   checks in a row; cpal's default-output unit may already play there in
+   between), with the 4-against-3 cycle intact: the next accent
    still falls on the bar's "one", no extra or missing click beyond a short
    gap at the switch.
 3. Unplug the headphones. Expected: same, back on the speakers.
@@ -75,8 +77,9 @@ cargo run --release -p polyrhythmic-metronome-app
    cards light in time.
 3. **Visual offset.** Click the gear at the bottom right ("Configurações").
    Expected: a popover with "OFFSET VISUAL (MS)" and a slider (0 to 500 ms),
-   starting at the latency CoreAudio reports for this device (often 0 to
-   a few ms on wired outputs). Move it to about 200 ms. Expected: the flashes
+   starting at the part of the output latency the beat times do not already
+   include, which is the stream latency only (often 0 ms on wired outputs;
+   see "Default visual offset" under Task 15). Move it to about 200 ms. Expected: the flashes
    now trail the clicks visibly. Set it back to taste. Click outside to
    close the popover.
 4. **Mini, always on top.** Open a PDF in Preview. Back in the metronome,
@@ -95,8 +98,9 @@ cargo run --release -p polyrhythmic-metronome-app
    minute.
 7. **Hidden window follows devices.** While the window is hidden and
    playing, plug in wired headphones. Expected: the clicks move to the
-   headphones within about 0.5 s (the service ticks 4 times a second from
-   a background thread even with no window shown).
+   headphones within about 0.75 s (the service ticks 4 times a second from
+   a background thread even with no window shown, and wants the new default
+   on two ticks in a row).
 8. **Reopening.** Click the Dock icon. Expected: the window does **not**
    come back. eframe 0.37 / winit 0.30 give no hook for the macOS "reopen"
    event, so a hidden window is shown again from the menu bar item ("Abrir
@@ -190,7 +194,7 @@ another app already holds one, the terminal shows
     hidden). Expected: the app quits (menu bar icon gone, no sound).
     Relaunch. Expected: the BPM and pattern you left.
 11. **Hidden tick.** While the window is hidden and playing, plug in wired
-    headphones. Expected: the sound moves within about 0.5 s (the service
+    headphones. Expected: the sound moves within about 0.75 s (the service
     is now ticked on every ticker wake-up, 4 times a second, even when a
     wake-up comes a little early).
 
@@ -251,12 +255,72 @@ The maximum difference was exactly 0: the recording is bit-identical to the
 reference. Whether the run sounded even was not judged (the agent cannot
 hear it).
 
-Finding: in one of three runs with this build, the stream was rebuilt once
+Finding (fixed in the final review wave, see below): in one of three runs
+with this build, the stream was rebuilt once
 during the run (`stream rebuilds: 1`, verdict INVALID, 5290496 frames, onset
 deviation 1024 frames afterwards because the new engine's tap restarts).
 Underruns were 0. The cause was not identified (the harness does not record
 which condition in `AudioService::tick` fired). The harness reports such a run
 as INVALID rather than hiding it. Worth watching in the 10-minute run.
+
+### Final review fix wave: rebuild triggers confirmed and recorded
+
+The rebuild above had 0 underruns and lost only 1536 frames (about 35 ms):
+the audio was healthy and the rebuild itself made the gap. Any single
+odd sample could trigger one. Now (`crates/audio/src/watch.rs`, unit tested):
+
+- a missing default output (including a failed UID query) rebuilds only
+  after 1 s of ticks; a different default output must be seen on two ticks
+  in a row (a flap A -> B -> A does nothing);
+- a wall clock that jumped (sleep, NTP, the user setting the time) counts as
+  sleep only if the data callback was not called since the previous tick;
+- the callback counter (no callback for over 1 s) is the only stall
+  detector: the data callback no longer flags a failure from CoreAudio's
+  host-time gap (a bogus `mHostTime` could fake one); late callbacks still
+  count as underruns;
+- every rebuild decision is recorded with its reason (`slept`, `stalled`,
+  `stream error <kind>`, `device changed <from> -> <to>`): the app prints it
+  on stderr and the harness prints it as it happens plus per-reason counts.
+  Any rebuild decision voids a harness run.
+
+Debug builds of the app and the harness also run the data callback under
+`assert_no_alloc` with `AllocDisabler` as the global allocator: an
+allocation in the callback aborts (checked by adding one on purpose: the
+debug harness aborted with "memory allocation of 1 bytes failed"; reverted).
+A 15 s debug harness run (2 load threads) passed sample-exact, and the debug
+app ran 12 s with the stream open without aborting. Release builds are
+unchanged.
+
+Three 2-minute runs, 12 load threads (`sysctl -n hw.ncpu` = 12), 2026-11-09,
+an Apple Silicon Mac (USB audio interface at 44100 Hz):
+
+```
+cargo run -p stress --release -- --minutes 2 --load <cores> --out stress.wav
+```
+
+| run | frames  | sounds (expected/detected/matched) | samples differing | max deviation | underruns | rebuilds | rebuild reasons | dropped | verdict |
+|-----|---------|------------------------------------|-------------------|---------------|-----------|----------|-----------------|---------|---------|
+| 1   | 5292544 | 943 / 943 / 943                    | 0                 | 0 frames      | 0         | 0        | none            | 0       | PASS    |
+| 2   | 5293056 | 944 / 944 / 944                    | 0                 | 0 frames      | 0         | 0        | none            | 0       | PASS    |
+| 3   | 5293056 | 944 / 944 / 944                    | 0                 | 0 frames      | 0         | 0        | none            | 0       | PASS    |
+
+Max sample difference 0 and first-onset offset 0 in all three. No rebuild
+was decided in any run, so the earlier one did not recur; its cause stays
+unconfirmed (the debounce does not log the samples it ignores). If one
+happens in the 10-minute run, the printed reason says which check fired.
+
+### Default visual offset
+
+cpal 0.18.2 (`host/coreaudio/macos/device.rs`, output render callback) sets
+`playback = callback + (device buffer frames + kAudioDevicePropertyLatency
++ kAudioDevicePropertySafetyOffset)`, and the engine stamps beat events
+with that time. Measured here: 538 frames ahead for a 512-frame buffer,
+i.e. device latency + safety offset = 26 frames (0.59 ms at 44.1 kHz). The
+old default visual offset added device + safety + stream latency again on
+top. It is now only `kAudioStreamPropertyLatency`, the part cpal leaves
+out (`OutputLatency::uncompensated`); on the USB interface tested it is 0 ms (stream
+latency 0, device + safety 0.59 ms, from the device smoke test). Offsets
+the user saved per device are kept as they are.
 
 ### 10-minute run with a browser playing video
 
@@ -285,7 +349,10 @@ With the app playing (`cargo run --release -p polyrhythmic-metronome-app`):
    Mac allows it (Bluetooth off, USB interface out, headphones out; on a
    laptop the built-in speakers stay, so this part needs a Mac mini or an
    external-only setup). Expected: the footer shows "sem saída de áudio" with
-   a red dot and the app keeps running.
+   a red dot within about a second (at once if cpal reports the device gone;
+   a default output that is merely missing for a moment is ignored for 1 s)
+   and the app keeps running. The terminal shows `audio stream rebuilt:`
+   with the reason; hovering the footer label shows the open error, if any.
 2. Plug an output back in. Expected: playing resumes within about a second
    with the bar position continuous; the footer shows the device name.
 3. While playing, put the Mac to sleep (Apple menu > Sleep) and wake it after
