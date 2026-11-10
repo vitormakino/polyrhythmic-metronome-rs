@@ -291,11 +291,10 @@ impl UiState {
         self.sessions.iter().find(|s| s.name == name)
     }
 
-    /// The progress of the session playing now: playing and not finished.
+    /// The progress of the session playing now. A finished one still counts
+    /// while playing (`OnFinish::Continue`): the base setup comes back only on Stop.
     pub fn running_session(&self) -> Option<&SessionProgress> {
-        self.session_progress
-            .as_ref()
-            .filter(|p| self.playing && !p.finished)
+        self.session_progress.as_ref().filter(|_| self.playing)
     }
 
     /// The tempo the views show: the session's while one runs, else the base.

@@ -53,10 +53,12 @@ pub fn session_strip(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
     let inner = rect.shrink2(vec2(PAD_X, PAD_Y));
     let line = Rect::from_min_size(inner.min, vec2(inner.width(), LINE_H));
 
-    let running = state.running_session().copied();
+    let active = state.running_session().copied();
+    // Its stages are still going; a finished one shows the summary.
+    let running = active.filter(|p| !p.finished);
     let combo_w = (inner.width() * 0.4).clamp(96.0, 200.0);
     let combo = Rect::from_min_size(line.min, vec2(combo_w, LINE_H));
-    if let Some(picked) = selector(ui, combo, state, running.is_none()) {
+    if let Some(picked) = selector(ui, combo, state, active.is_none()) {
         state.select_session(picked, actions);
     }
     if state.session.is_none() {
@@ -84,8 +86,9 @@ pub fn session_strip(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
         }
         Some((parts.join(SEPARATOR), t.text_dim))
     } else {
-        state.session_summary.map(|p| {
-            let continuing = state.playing
+        let finished = active.filter(|p| p.finished).or(state.session_summary);
+        finished.map(|p| {
+            let continuing = active.is_some()
                 && plan
                     .as_ref()
                     .is_some_and(|plan| plan.on_finish == OnFinish::Continue);
@@ -296,8 +299,9 @@ fn describe(m: &Messages, stage: &Stage, moment: &Moment, on_screen: usize) -> V
 pub(crate) fn stage_bar(painter: &Painter, rect: Rect, state: &UiState) {
     let t = &state.theme;
     let plan = state.selected_session().map(|s| &s.plan);
-    let running = state.running_session();
-    let stages = running
+    let active = state.running_session();
+    let running = active.filter(|p| !p.finished);
+    let stages = active
         .map(|p| p.stages as usize)
         .or(plan.map(|p| p.stages.len()))
         .unwrap_or(0)
@@ -313,7 +317,7 @@ pub(crate) fn stage_bar(painter: &Painter, rect: Rect, state: &UiState) {
                     .and_then(|plan| plan.stages.get(current))
                     .map_or(0.0, |stage| stage_fraction(stage, p)),
             }
-        } else if state.session_summary.is_some() {
+        } else if active.is_some() || state.session_summary.is_some() {
             1.0
         } else {
             0.0

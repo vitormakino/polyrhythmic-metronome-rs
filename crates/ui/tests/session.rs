@@ -222,9 +222,42 @@ fn without_a_running_session_the_base_is_shown_and_set() {
         p.moment.bpm = Bpm::new(110);
         p.finished = true;
     });
+    // Stopped after finishing: the base again.
+    finished.playing = false;
     assert_eq!(finished.shown_bpm(), Bpm::new(100));
     finished.set_shown_bpm(Bpm::new(90), &mut actions);
     assert_eq!(finished.bpm, Bpm::new(90));
+}
+
+#[test]
+fn continue_after_finish_keeps_effective_tempo() {
+    let mut p = plan("Endless");
+    p.on_finish = OnFinish::Continue;
+    let state = running(p, |p| {
+        p.stage = 3;
+        p.finished = true;
+        p.moment.bpm = Bpm::new(140);
+        p.moment.pulses.off = 0b10;
+    });
+    assert_eq!(state.shown_bpm(), Bpm::new(140));
+    assert!(
+        !state.pulse_shown_enabled(1),
+        "the session mask still applies"
+    );
+    let mut h = harness(MEDIUM, state);
+    assert!(h.query_by_label("Done · continuing").is_some());
+    assert!(h.query_by_label_contains("Stage 3/3").is_none());
+    click(&mut h, "Increase BPM");
+    assert_eq!(
+        h.state().actions.last(),
+        Some(&UiAction::SetBpm(Bpm::new(141)))
+    );
+    assert_eq!(h.state().ui.bpm, Bpm::new(101));
+    // Stop brings the base back, with the summary.
+    click(&mut h, "Stop");
+    assert_eq!(h.state().ui.shown_bpm(), Bpm::new(101));
+    assert!(h.query_by_label("Done · 2:30 · reached 140 BPM").is_none());
+    assert!(h.query_by_label_contains("Done · ").is_some());
 }
 
 fn muted_beat_lights(show_muted_visuals: bool) -> bool {
