@@ -221,6 +221,9 @@ pub struct Engine {
     /// A `Session` sent while `active`: replaces `plan` when it ends.
     queued: Option<Option<Box<SessionPlan>>>,
     active: Option<Active>,
+    /// `Play` commands taken, no-ops included (the Transport counts the
+    /// ones it sent).
+    plays: u64,
     chime: Vec<f32>,
     session_garbage: Producer<Box<SessionPlan>>,
     session_out: SessionWriter,
@@ -281,6 +284,7 @@ impl Engine {
             plan,
             queued: None,
             active,
+            plays: 0,
             chime: end_chime(sample_rate),
             session_garbage: session_garbage_tx,
             session_out: session_tx,
@@ -384,6 +388,8 @@ impl Engine {
     }
 
     fn play(&mut self, at: u64) {
+        self.plays += 1;
+        self.session_out.publish_plays(self.plays);
         if !self.playing {
             self.timeline.restart(&self.current.update.pattern, at);
             self.playing = true;

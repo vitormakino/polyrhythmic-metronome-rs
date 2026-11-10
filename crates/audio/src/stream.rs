@@ -204,6 +204,10 @@ pub struct Transport {
     running: bool,
     /// A plan sent while `running`, as the engine holds it until `Stop`.
     queued: Option<Option<SessionPlan>>,
+    /// `Play` commands recorded, and how many of them went to engines
+    /// before the current one.
+    plays: u64,
+    plays_before: u64,
 }
 
 impl Transport {
@@ -220,6 +224,8 @@ impl Transport {
             plan: init.session.as_ref().map(|(plan, _)| (**plan).clone()),
             running,
             queued: None,
+            plays: 0,
+            plays_before: 0,
         }
     }
 
@@ -228,6 +234,7 @@ impl Transport {
     pub fn record(&mut self, command: &Command) {
         match command {
             Command::Play => {
+                self.plays += 1;
                 if !self.playing {
                     self.playing = true;
                     self.running = self.plan.is_some();
@@ -291,12 +298,16 @@ impl Transport {
         snapshot: PositionSnapshot,
         session: &SessionReader,
     ) -> EngineInit {
-        let latest = session.latest_at();
+        let (plays, latest) = session.latest_at();
         let mut init = self.resume_init(snapshot);
         if !self.running {
             return init;
         }
-        let finished_stop = !snapshot.playing
+        // A Play the engine has not taken yet starts the session at the one
+        // (below); a stale `finished` belongs to the run before it.
+        let every_play_taken = plays == self.plays - self.plays_before;
+        let finished_stop = every_play_taken
+            && !snapshot.playing
             && latest.is_some_and(|(_, p)| p.finished)
             && self
                 .plan
@@ -320,6 +331,12 @@ impl Transport {
             *slot = Some(progress);
         }
         init
+    }
+
+    /// The engine built from [`resume_init_with`](Self::resume_init_with)
+    /// replaces the old one: commands recorded from now on go to it.
+    pub fn engine_replaced(&mut self) {
+        self.plays_before = self.plays;
     }
 
     /// The `Session` command a rebuilt engine needs while a session runs: a
@@ -565,6 +582,7 @@ impl AudioService {
             }
         };
         self.last_error = None;
+        self.transport.engine_replaced();
         if let Some(command) = self.transport.queued_session() {
             // A fresh queue: there is room.
             let pushed = handle.commands.push(command);

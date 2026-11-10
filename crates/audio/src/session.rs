@@ -10,6 +10,8 @@ use pm_core::session::{PROGRESS_WORDS, SessionProgress};
 #[derive(Default)]
 struct SessionCell {
     seq: AtomicU64,
+    /// `Play` commands the engine has taken (no-ops included).
+    plays: AtomicU64,
     present: AtomicBool,
     /// Engine frame of the instant the progress describes (its latest bar
     /// or beat).
@@ -46,6 +48,17 @@ impl SessionWriter {
         }
         c.seq.store(seq.wrapping_add(2), Ordering::Release);
     }
+
+    /// Publishes how many `Play` commands the engine has taken. Never blocks
+    /// or allocates.
+    pub(crate) fn publish_plays(&self, plays: u64) {
+        let c = &*self.0;
+        let seq = c.seq.load(Ordering::Relaxed);
+        c.seq.store(seq.wrapping_add(1), Ordering::Relaxed);
+        fence(Ordering::Release);
+        c.plays.store(plays, Ordering::Relaxed);
+        c.seq.store(seq.wrapping_add(2), Ordering::Release);
+    }
 }
 
 impl SessionReader {
@@ -53,11 +66,12 @@ impl SessionReader {
     /// while a session runs, and when it finishes. `None` until a session
     /// runs, and again after a `Play` without a plan.
     pub fn latest(&self) -> Option<SessionProgress> {
-        self.latest_at().map(|(_, progress)| progress)
+        self.latest_at().1.map(|(_, progress)| progress)
     }
 
+    /// The `Play` commands the engine has taken, and
     /// [`latest`](Self::latest) with the engine frame it was taken at.
-    pub(crate) fn latest_at(&self) -> Option<(u64, SessionProgress)> {
+    pub(crate) fn latest_at(&self) -> (u64, Option<(u64, SessionProgress)>) {
         let c = &*self.0;
         loop {
             let before = c.seq.load(Ordering::Acquire);
@@ -65,13 +79,15 @@ impl SessionReader {
                 std::hint::spin_loop();
                 continue;
             }
+            let plays = c.plays.load(Ordering::Relaxed);
             let present = c.present.load(Ordering::Relaxed);
             let frame = c.frame.load(Ordering::Relaxed);
             let words: [u64; PROGRESS_WORDS] =
                 std::array::from_fn(|i| c.words[i].load(Ordering::Relaxed));
             fence(Ordering::Acquire);
             if c.seq.load(Ordering::Relaxed) == before {
-                return present.then(|| (frame, SessionProgress::from_words(&words)));
+                let progress = present.then(|| (frame, SessionProgress::from_words(&words)));
+                return (plays, progress);
             }
         }
     }

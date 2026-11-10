@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use pm_audio::{AudioService, Command, Engine, EngineHandle, EngineInit, Transport};
 use pm_core::session::{Jump, OnFinish, Ramp, SessionPlan, Span, Stage, Tempo};
-use pm_core::{Bpm, MAX_PULSES, Pattern, PulseId};
+use pm_core::{Bpm, MAX_PULSES, MusicalPosition, Pattern, PulseId};
 
 const SR: u32 = 48_000;
 const BUF: usize = 512;
@@ -315,6 +315,63 @@ fn rebuild_after_a_session_stopped_itself_stays_stopped() {
     assert_eq!(rebuilt.resume, None, "the UI's Play is not replayed");
     let (plan, progress) = rebuilt.session.unwrap();
     assert_eq!((plan.stages.len(), progress), (1, None));
+}
+
+#[test]
+fn rebuild_keeps_a_play_sent_after_a_session_stopped_itself() {
+    let p = Pattern::default();
+    let first = init(&p, 120);
+    let mut t = Transport::new(&first);
+    let (mut a, mut ha) = Engine::new(SR, 1, first);
+    let mut short = two_stage_plan();
+    short.stages.truncate(1);
+    send(&mut t, &mut ha, Command::Session(Some(Box::new(short))));
+    send(&mut t, &mut ha, Command::Play);
+    render(&mut a, &mut ha, 400);
+    assert!(ha.session.latest().unwrap().finished);
+    // The UI sees `finished`, sends Stop, then plays the session again with
+    // another plan; the stream is rebuilt before the engine takes the Play.
+    send(&mut t, &mut ha, Command::Stop);
+    send(
+        &mut t,
+        &mut ha,
+        Command::Session(Some(Box::new(two_stage_plan()))),
+    );
+    send(&mut t, &mut ha, Command::Play);
+    let snap = ha.position.snapshot();
+    assert!(
+        !snap.playing && ha.session.latest().unwrap().finished,
+        "stale"
+    );
+
+    let rebuilt = t.resume_init_with(snap, &ha.session);
+    assert_eq!(
+        rebuilt.resume,
+        Some(MusicalPosition::start_of(0)),
+        "Play kept"
+    );
+    let (plan, progress) = rebuilt.session.as_ref().unwrap();
+    assert_eq!((plan.stages.len(), *progress), (2, None));
+    t.engine_replaced();
+    let (mut b, mut hb) = Engine::new(SR, 1, rebuilt);
+    let got = render(&mut b, &mut hb, 1);
+    assert_eq!(got[..2], [(0, p.pulses[0].id, 0), (0, p.pulses[1].id, 0)]);
+    let progress = hb.session.latest().expect("the new run");
+    assert_eq!(
+        (progress.stage, progress.stages, progress.finished),
+        (1, 2, false)
+    );
+
+    // Once the new engine has taken every Play, a finish is a finish again.
+    let mut short = two_stage_plan();
+    short.stages.truncate(1);
+    send(&mut t, &mut hb, Command::Stop);
+    send(&mut t, &mut hb, Command::Session(Some(Box::new(short))));
+    send(&mut t, &mut hb, Command::Play);
+    render(&mut b, &mut hb, 400);
+    let snap = hb.position.snapshot();
+    assert!(!snap.playing && hb.session.latest().unwrap().finished);
+    assert_eq!(t.resume_init_with(snap, &hb.session).resume, None);
 }
 
 #[test]
