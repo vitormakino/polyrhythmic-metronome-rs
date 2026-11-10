@@ -30,8 +30,6 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Sense, ViewportCommand};
 use pm_audio::{AudioService, DeviceInfo, EngineInit};
-use pm_ui::i18n::Messages;
-use std::sync::Arc;
 
 // Debug builds abort on an allocation inside the audio callback (the
 // `assert_no_alloc` guard in `pm_audio`'s data callback); release builds use
@@ -81,8 +79,8 @@ struct App {
     _hotkeys: Option<global_hotkey::GlobalHotKeyManager>,
     remote_tx: Sender<Remote>,
     remote_rx: Receiver<Remote>,
-    /// New messages from the config watcher (the language changed).
-    config_rx: Receiver<Arc<Messages>>,
+    /// New messages and theme from the config watcher.
+    config_rx: Receiver<config_watch::Appearance>,
     /// "Quit" was chosen: let the next close request through.
     quitting: bool,
 }
@@ -92,8 +90,8 @@ impl App {
         audio: AudioService,
         settings: Settings,
         settings_dir: Option<PathBuf>,
-        messages: Arc<Messages>,
-        config_rx: Receiver<Arc<Messages>>,
+        appearance: config_watch::Appearance,
+        config_rx: Receiver<config_watch::Appearance>,
     ) -> App {
         let now = Instant::now();
         let (remote_tx, remote_rx) = mpsc::channel();
@@ -101,7 +99,8 @@ impl App {
         ui.pattern = settings.pattern.clone();
         ui.bpm = settings.bpm;
         ui.mode = settings.mode;
-        ui.messages = messages;
+        ui.messages = appearance.messages;
+        ui.theme = appearance.theme;
         let mut app = App {
             audio,
             ctl: Controller::new(ui),
@@ -282,9 +281,12 @@ impl eframe::App for App {
             self.remote(ctx, remote, now);
         }
         self.ctl.flush(&mut self.audio);
-        // Only the latest language matters; no audio command is involved.
-        if let Some(messages) = self.config_rx.try_iter().last() {
-            self.ctl.ui.messages = messages;
+        // Only the latest language and theme matter; no audio command is
+        // involved.
+        if let Some(appearance) = self.config_rx.try_iter().last() {
+            self.ctl.ui.messages = appearance.messages;
+            theme::apply(ctx, &appearance.theme);
+            self.ctl.ui.theme = appearance.theme;
             if let Some(tray) = &mut self.tray {
                 tray.set_messages(&self.ctl.ui.messages);
             }
@@ -382,7 +384,7 @@ fn spawn_ticker(ctx: egui::Context) {
     }
 }
 
-/// Creates the config folder's files and loads the language, before the
+/// Creates the config folder's files and loads the language and theme, before the
 /// window opens. Any problem goes to stderr and the app runs in English.
 fn load_config() -> (config_watch::Loader, Option<PathBuf>) {
     let mut loader = config_watch::Loader::default();
@@ -428,9 +430,13 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             theme::install(&cc.egui_ctx);
+            theme::apply(&cc.egui_ctx, &loader.theme);
             spawn_ticker(cc.egui_ctx.clone());
             let (config_tx, config_rx) = mpsc::channel();
-            let messages = loader.messages.clone();
+            let appearance = config_watch::Appearance {
+                messages: loader.messages.clone(),
+                theme: loader.theme.clone(),
+            };
             if let Some(dir) = config_dir {
                 config_watch::spawn(dir, loader, config_tx, cc.egui_ctx.clone());
             }
@@ -438,7 +444,7 @@ fn main() -> eframe::Result {
                 audio,
                 settings,
                 settings_dir,
-                messages,
+                appearance,
                 config_rx,
             )))
         }),

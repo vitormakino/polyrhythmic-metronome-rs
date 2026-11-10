@@ -7,8 +7,9 @@ use egui_kittest::{Harness, SnapshotOptions, wgpu::WgpuTestRenderer};
 use pm_audio::BeatEvent;
 use pm_core::{Intensity, MAX_PULSES, Pattern, SoundType};
 use pm_ui::i18n::Messages;
+use pm_ui::palette::{Palette, parse};
 use pm_ui::state::{PENDING_BEATS_CAP, UiAction, UiState};
-use pm_ui::theme;
+use pm_ui::theme::{self, Theme};
 use pm_ui::views::full::full_view;
 
 const MIN: Vec2 = Vec2::new(420.0, 640.0);
@@ -40,9 +41,13 @@ fn harness_with(
     state: UiState,
     renderer: Option<WgpuTestRenderer>,
 ) -> Harness<'static, App> {
+    let active = state.theme.clone();
     let mut builder = Harness::builder()
         .with_size(size)
-        .with_context_setup(theme::install);
+        .with_context_setup(move |ctx| {
+            theme::install(ctx);
+            theme::apply(ctx, &active);
+        });
     if let Some(renderer) = renderer {
         builder = builder.renderer(renderer);
     }
@@ -427,6 +432,22 @@ fn snapshot(name: &str, size: Vec2, many_pulses: bool) {
 }
 
 fn snapshot_in(name: &str, size: Vec2, many_pulses: bool, portuguese: bool) {
+    snapshot_themed(
+        name,
+        size,
+        many_pulses,
+        portuguese,
+        Theme::builtin("default"),
+    );
+}
+
+fn snapshot_themed(
+    name: &str,
+    size: Vec2,
+    many_pulses: bool,
+    portuguese: bool,
+    theme: Option<Theme>,
+) {
     let Some(renderer) = renderer() else {
         eprintln!("SKIPPED {name}: no wgpu adapter available");
         return;
@@ -436,7 +457,8 @@ fn snapshot_in(name: &str, size: Vec2, many_pulses: bool, portuguese: bool) {
     } else {
         UiState::default()
     };
-    let state = if portuguese { pt_br(state) } else { state };
+    let mut state = if portuguese { pt_br(state) } else { state };
+    state.theme = Arc::new(theme.expect("theme exists"));
     let mut h = harness_with(size, state, Some(renderer));
     if many_pulses {
         let settings = if portuguese {
@@ -503,4 +525,68 @@ fn switching_the_language_relabels_the_view() {
 #[test]
 fn english_snapshot_full() {
     snapshot_in("full_medium_default_en", MEDIUM, false, false);
+}
+
+#[test]
+fn switching_the_theme_repaints_without_actions() {
+    let mut h = harness(MEDIUM, UiState::default());
+    h.state_mut().actions.clear();
+    h.state_mut().ui.theme = Arc::new(Theme::builtin("light").unwrap());
+    h.run();
+    assert!(
+        h.state().actions.is_empty(),
+        "a theme switch emits no UiAction"
+    );
+}
+
+#[test]
+fn pulse_colors_keep_their_slot_after_reordering() {
+    let light = Theme::builtin("light").unwrap();
+    let mut state = UiState::default();
+    state.pattern.add_pulse();
+    assert_eq!(state.pattern.pulses.len(), 3);
+    let third = state.pattern.pulses[2].id;
+    state.theme = Arc::new(light.clone());
+    let mut h = harness(MEDIUM, state);
+    let from = h.get_by_label("Pulse 3: move").rect().center();
+    let to = h.get_by_label("Pulse 1").rect().center();
+    h.hover_at(from);
+    h.run();
+    h.drag_at(from);
+    h.run();
+    for i in 1..=4 {
+        h.hover_at(from + (to - from) * (i as f32 / 4.0));
+        h.run();
+    }
+    h.drop_at(to);
+    h.run();
+    let moved = &h.state().ui.pattern.pulses[0];
+    assert_eq!(moved.id, third, "pulse 3 is now on top");
+    // The view paints `theme.pulse_color(pulse.color)`: the slot, not the stored v1 rgb.
+    assert_eq!(light.pulse_color(moved.color), light.pulses[2]);
+    assert_ne!(light.pulses[2], theme::DARK.pulses[2]);
+}
+
+#[test]
+fn full_medium_light() {
+    snapshot_themed(
+        "full_medium_light",
+        MEDIUM,
+        true,
+        false,
+        Theme::builtin("light"),
+    );
+}
+
+#[test]
+fn full_medium_tokyo() {
+    let text = include_str!("fixtures/tokyo-night.toml");
+    let (palette, _) = parse(text, &Palette::DEFAULT).expect("fixture parses");
+    snapshot_themed(
+        "full_medium_tokyo",
+        MEDIUM,
+        true,
+        false,
+        Some(Theme::from_palette(&palette)),
+    );
 }

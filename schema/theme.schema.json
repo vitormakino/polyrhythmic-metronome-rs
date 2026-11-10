@@ -1,0 +1,140 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "accent": {
+      "description": "accent color (Play button, selection, top accent); default #f97316",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "background": {
+      "description": "window background; default #09090b",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "blue": {
+      "description": "pulse color 2; default #3b82f6",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "bright_blue": {
+      "description": "bright blue terminal color; default #60a5fa",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "bright_cyan": {
+      "description": "bright cyan terminal color; default #22d3ee",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "bright_foreground": {
+      "description": "strongest text and highlights; default #ffffff",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "bright_green": {
+      "description": "bright green terminal color; default #34d399",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "bright_magenta": {
+      "description": "bright magenta terminal color; default #c084fc",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "bright_red": {
+      "description": "bright red terminal color; default #fb7185",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "bright_yellow": {
+      "description": "bright yellow terminal color; default #facc15",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "brown": {
+      "description": "brown terminal color; default #78350f",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "cyan": {
+      "description": "cyan terminal color; default #06b6d4",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "dark_background": {
+      "description": "not used by the app (Omarchy key); default #050506",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "dark_foreground": {
+      "description": "labels and idle icons; default #71717a",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "darker_background": {
+      "description": "not used by the app (Omarchy key); default #000000",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "foreground": {
+      "description": "primary text; default #f4f4f5",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "green": {
+      "description": "pulse color 3; default #10b981",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "light_foreground": {
+      "description": "not used by the app (Omarchy key); default #d4d4d8",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "lighter_background": {
+      "description": "card background; default #18181b",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "magenta": {
+      "description": "pulse color 4; default #a855f7",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "mode": {
+      "description": "dark or light window; default dark",
+      "enum": [
+        "dark",
+        "light"
+      ]
+    },
+    "muted": {
+      "description": "inactive beat dots and pressed widgets; default #3f3f46",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "orange": {
+      "description": "pulse color 1; default #f97316",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "red": {
+      "description": "pulse color 5; default #f43f5e",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "selection": {
+      "description": "card and widget borders; default #27272a",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    },
+    "yellow": {
+      "description": "pulse color 6; default #eab308",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "type": "string"
+    }
+  },
+  "title": "Polyrhythmic Metronome theme",
+  "type": "object"
+}

@@ -1,5 +1,5 @@
 //! `config.toml` in `~/.config/polyrhythmic-metronome`, plus the Draft 4 JSON
-//! Schemas that give editors (Taplo) autocomplete for it and for `locales/`.
+//! Schemas that give editors (Taplo) autocomplete for it, `locales/` and `themes/`.
 //!
 //! The app creates `config.toml` once and never writes to it again; only
 //! `schema/` is rewritten, and only when its content differs.
@@ -40,16 +40,25 @@ pub struct Config {
     #[serde(default = "default_language")]
     #[schemars(schema_with = "language_schema")]
     pub language: String,
+    /// Color theme: "default", "light", or the name of a file in themes/ (without .toml).
+    #[serde(default = "default_theme")]
+    #[schemars(schema_with = "theme_schema")]
+    pub theme: String,
 }
 
 fn default_language() -> String {
     "en".to_owned()
 }
 
+fn default_theme() -> String {
+    "default".to_owned()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
             language: default_language(),
+            theme: default_theme(),
         }
     }
 }
@@ -67,6 +76,19 @@ fn language_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     })
 }
 
+fn theme_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "description": "Color theme: \"default\", \"light\", or the name of a file in themes/ (without .toml).",
+        "default": "default",
+        "anyOf": [
+            { "enum": pm_ui::palette::BUILTIN_THEMES },
+            { "type": "string", "pattern": THEME_PATTERN }
+        ]
+    })
+}
+
+const THEME_PATTERN: &str = "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$";
+
 /// Hand-written equivalent of `^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`. Rejects
 /// anything that could name a path.
 pub fn valid_language(code: &str) -> bool {
@@ -78,7 +100,7 @@ pub fn valid_language(code: &str) -> bool {
 }
 
 /// Parses `config.toml`. `Ok` carries warnings (unknown keys); `Err` carries a
-/// message with the line for bad syntax or an invalid `language`.
+/// message with the line for bad syntax or an invalid `language` or `theme`.
 pub fn parse(text: &str) -> Result<(Config, Vec<String>), String> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let table: toml::Table = text.parse().map_err(|e: toml::de::Error| e.to_string())?;
@@ -96,6 +118,19 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), String> {
                     return Err(format!(
                         "line {line}: language must be a string, got {value}"
                     ));
+                }
+            }
+        } else if key == "theme" {
+            let line = key_line(text, "theme");
+            match value.as_str() {
+                Some(name) if pm_ui::palette::valid_theme_name(name) => {
+                    config.theme = name.to_owned();
+                }
+                Some(name) => {
+                    return Err(format!("line {line}: invalid theme name {name:?}"));
+                }
+                None => {
+                    return Err(format!("line {line}: theme must be a string, got {value}"));
                 }
             }
         } else {
@@ -140,11 +175,12 @@ fn pretty(value: &serde_json::Value) -> String {
     s
 }
 
-/// Creates the folder, `config.toml` (only if absent), `locales/` and the
+/// Creates the folder, `config.toml` (only if absent), `locales/`, `themes/` and the
 /// schemas (only when their content differs).
 pub fn ensure_files(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir.join("schema"))?;
     fs::create_dir_all(dir.join("locales"))?;
+    fs::create_dir_all(dir.join("themes"))?;
     match OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -161,6 +197,10 @@ pub fn ensure_files(dir: &Path) -> io::Result<()> {
     write_if_changed(
         &dir.join("schema/locale.schema.json"),
         &pretty(&pm_ui::i18n::locale_schema()),
+    )?;
+    write_if_changed(
+        &dir.join("schema/theme.schema.json"),
+        &pretty(&pm_ui::palette::theme_schema()),
     )
 }
 
@@ -297,6 +337,7 @@ mod tests {
         // UPDATE_SCHEMAS=1 rewrites schema/*.json from the code, like UPDATE_SNAPSHOTS.
         check_or_update("schema/config.schema.json", &config_schema());
         check_or_update("schema/locale.schema.json", &pm_ui::i18n::locale_schema());
+        check_or_update("schema/theme.schema.json", &pm_ui::palette::theme_schema());
     }
 
     #[test]
@@ -320,6 +361,34 @@ mod tests {
             "stale"
         );
         assert!(dir.join("schema/locale.schema.json").exists());
+        assert!(dir.join("schema/theme.schema.json").exists());
+        assert!(dir.join("themes").is_dir());
+    }
+
+    #[test]
+    fn theme_key_defaults_validates_and_has_a_schema() {
+        assert_eq!(parse("").unwrap().0.theme, "default");
+        assert_eq!(
+            parse("theme = \"tokyo-night\"").unwrap().0.theme,
+            "tokyo-night"
+        );
+        assert!(parse("theme = \"../x\"").unwrap_err().contains("line 1"));
+        let err = parse("language = \"en\"\ntheme = 3\n").unwrap_err();
+        assert!(err.contains("line 2") && err.contains('3'), "{err}");
+        assert_eq!(
+            config_schema()["properties"]["theme"]["anyOf"][0]["enum"],
+            serde_json::json!(["default", "light"])
+        );
+        assert!(TEMPLATE.contains("theme = \"default\""));
+        let props = &config_schema()["properties"];
+        assert_eq!(
+            props["theme"]["description"],
+            "Color theme: \"default\", \"light\", or the name of a file in themes/ (without .toml)."
+        );
+        assert_eq!(
+            props["language"]["description"],
+            "Interface language: \"en\" (default), \"pt-BR\", or the code of a file in locales/."
+        );
     }
 
     #[cfg(unix)]

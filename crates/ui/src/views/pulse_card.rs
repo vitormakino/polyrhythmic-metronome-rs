@@ -11,7 +11,7 @@ use pm_core::{Intensity, MAX_PULSES, Pulse, PulseId, SoundType};
 use super::widgets;
 use crate::i18n::{Messages, fill};
 use crate::state::{UiAction, UiState};
-use crate::theme;
+use crate::theme::{self, Theme};
 
 const CARD_GAP: f32 = 12.0;
 /// Narrowest pulse card that still fits its header icons and title.
@@ -21,11 +21,6 @@ const PULSE_RADIUS: u8 = 16;
 /// Room around the cards inside the scroll area for their glow and the scroll bar.
 const LIST_INSET: f32 = 6.0;
 const SCROLL_BAR_ROOM: f32 = 8.0;
-
-fn pulse_color(pulse: &Pulse) -> Color32 {
-    let [r, g, b] = pulse.color;
-    Color32::from_rgb(r, g, b)
-}
 
 /// An edit requested by a pulse card, applied after the list is drawn.
 enum Edit {
@@ -183,6 +178,7 @@ fn pulse_grid(
     for (i, (pulse, metrics)) in pulses.iter().zip(&grid.metrics).enumerate() {
         Card {
             m: &state.messages,
+            theme: &state.theme,
             index: i,
             id: ui.make_persistent_id(("pulse", pulse.id)),
             pulse,
@@ -271,6 +267,7 @@ impl CardMetrics {
 
 struct Card<'a> {
     m: &'a Messages,
+    theme: &'a Theme,
     index: usize,
     id: Id,
     pulse: &'a Pulse,
@@ -294,14 +291,15 @@ impl Card<'_> {
 
     fn show(&self, ui: &Ui, edits: &mut Vec<Edit>, drag: &mut DragOutcome) {
         let (pulse, rect, id) = (self.pulse, self.rect, self.id);
+        let t = self.theme;
         let mut painter = ui.painter().clone();
         if !pulse.enabled {
             painter.multiply_opacity(0.5);
         }
         let color = if pulse.enabled {
-            pulse_color(pulse)
+            t.pulse_color(pulse.color)
         } else {
-            theme::DOT_INACTIVE
+            t.dot_inactive
         };
 
         // The card's own node, so automation can find it and read its rect.
@@ -314,15 +312,15 @@ impl Card<'_> {
         } else {
             0.0
         };
-        let border = if self.lit { color } else { theme::BORDER };
-        theme::paint_card_with_radius(&painter, rect, border, glow, PULSE_RADIUS);
+        let border = if self.lit { color } else { t.border };
+        theme::paint_card_with_radius(&painter, t, rect, border, glow, PULSE_RADIUS);
         let radius = CornerRadius::same(PULSE_RADIUS);
         if self.lit && self.flash > 0.01 {
             let ring = Stroke::new(2.0, theme::with_alpha(color, 0.8 * self.flash));
             painter.rect_stroke(rect, radius, ring, StrokeKind::Outside);
         }
         if self.drop_target {
-            let ring = Stroke::new(1.5, theme::ACCENT);
+            let ring = Stroke::new(1.5, t.accent);
             painter.rect_stroke(rect, radius, ring, StrokeKind::Outside);
         }
 
@@ -341,7 +339,7 @@ impl Card<'_> {
 
         // Bottom bar: one segment per beat, alpha by intensity.
         let bar = Rect::from_min_max(pos2(inner.left(), inner.bottom() - BOTTOM_BAR), inner.max);
-        theme::paint_band(&painter, inner, inner_radius, bar, theme::BORDER);
+        theme::paint_band(&painter, inner, inner_radius, bar, t.border);
         let seg = bar.width() / pulse.intensities.len().max(1) as f32;
         for (k, intensity) in pulse.intensities.iter().enumerate() {
             let alpha = if pulse.enabled {
@@ -364,6 +362,7 @@ impl Card<'_> {
     /// Drag handle and settings on the left, mute and remove on the right, title between.
     fn header(&self, ui: &Ui, painter: &Painter, edits: &mut Vec<Edit>, drag: &mut DragOutcome) {
         let (pulse, rect, id) = (self.pulse, self.rect, self.id);
+        let t = self.theme;
         let icon_y = rect.top() + 4.0 + ICON_BUTTON / 2.0;
         let slot = |x: f32| Rect::from_center_size(pos2(x, icon_y), Vec2::splat(ICON_BUTTON));
         let left = rect.left() + 4.0 + ICON_BUTTON / 2.0;
@@ -377,9 +376,9 @@ impl Card<'_> {
             &self.label(&self.m.pulse_move),
         );
         let grip_color = if grip.hovered() || grip.dragged() {
-            theme::TEXT_MUTED
+            t.text_muted
         } else {
-            theme::DOT_INACTIVE
+            t.dot_inactive
         };
         widgets::grip(painter, grip_rect.center(), 14.0, grip_color);
         if grip.drag_started() {
@@ -398,9 +397,9 @@ impl Card<'_> {
             self.open,
         );
         let gear_color = if self.open {
-            theme::ACCENT
+            t.accent
         } else {
-            widgets::idle_color(&gear, theme::TEXT_MUTED)
+            widgets::idle_color(t, &gear, t.text_muted)
         };
         widgets::settings(painter, gear_rect.center(), 16.0, gear_color);
         if gear.clicked() {
@@ -416,11 +415,11 @@ impl Card<'_> {
             self.can_remove,
         );
         let trash_color = if !self.can_remove {
-            theme::BORDER
+            t.border
         } else if trash.hovered() {
-            theme::PALETTE[4]
+            t.pulses[4]
         } else {
-            theme::TEXT_MUTED
+            t.text_muted
         };
         widgets::trash(painter, trash_rect.center(), 15.0, trash_color);
         if trash.clicked() {
@@ -435,16 +434,12 @@ impl Card<'_> {
             &self.label(&self.m.pulse_mute),
             !pulse.enabled,
         );
-        let green = theme::PALETTE[2];
+        let green = t.pulses[2];
         let (power_color, power_fill) = if pulse.enabled {
-            let c = if power.hovered() {
-                green
-            } else {
-                theme::TEXT_MUTED
-            };
+            let c = if power.hovered() { green } else { t.text_muted };
             (c, Some(theme::with_alpha(green, 0.2)))
         } else {
-            (widgets::idle_color(&power, theme::DOT_INACTIVE), None)
+            (widgets::idle_color(t, &power, t.dot_inactive), None)
         };
         widgets::power(painter, power_rect.center(), 14.0, power_color, power_fill);
         if power.clicked() {
@@ -462,7 +457,7 @@ impl Card<'_> {
             Align2::CENTER_CENTER,
             &pulse_title(self.m, self.index + 1),
             title_font(),
-            theme::TEXT_MUTED,
+            t.text_muted,
             1.0,
         );
     }
@@ -470,6 +465,7 @@ impl Card<'_> {
     /// `+`, the beat count in the pulse color, `-`.
     fn counter(&self, ui: &Ui, painter: &Painter, color: Color32, edits: &mut Vec<Edit>) {
         let (pulse, rect, id) = (self.pulse, self.rect, self.id);
+        let t = self.theme;
         let cx = rect.center().x;
         let mut y = rect.top()
             + ICON_ROW
@@ -490,7 +486,7 @@ impl Card<'_> {
             painter,
             up.center(),
             14.0,
-            widgets::idle_color(&up_resp, theme::TEXT_DIM),
+            widgets::idle_color(t, &up_resp, t.text_dim),
         );
         if up_resp.clicked() {
             edits.push(Edit::Beats(pulse.id, pulse.beats + 1));
@@ -516,9 +512,9 @@ impl Card<'_> {
             can_less,
         );
         let down_color = if can_less {
-            widgets::idle_color(&down_resp, theme::TEXT_DIM)
+            widgets::idle_color(t, &down_resp, t.text_dim)
         } else {
-            theme::DOT_INACTIVE
+            t.dot_inactive
         };
         widgets::minus(painter, down.center(), 14.0, down_color);
         if down_resp.clicked() {
@@ -536,11 +532,12 @@ impl Card<'_> {
         edits: &mut Vec<Edit>,
     ) {
         let (pulse, id) = (self.pulse, self.id);
-        painter.rect_filled(panel, 0.0, Color32::from_black_alpha(51));
+        let t = self.theme;
+        painter.rect_filled(panel, 0.0, t.overlay);
         painter.hline(
             panel.x_range(),
             panel.top(),
-            Stroke::new(1.0, theme::with_alpha(theme::BORDER, 0.5)),
+            Stroke::new(1.0, theme::with_alpha(t.border, 0.5)),
         );
 
         let per_row = self.metrics.bars_per_row;
@@ -563,11 +560,11 @@ impl Card<'_> {
                     r
                 };
                 let bg = if resp.hovered() {
-                    widgets::HOVER_FILL
+                    t.hover_fill
                 } else {
-                    theme::BORDER
+                    t.border
                 };
-                let edge = Stroke::new(1.0, theme::with_alpha(theme::DOT_INACTIVE, 0.3));
+                let edge = Stroke::new(1.0, theme::with_alpha(t.dot_inactive, 0.3));
                 painter.rect(r, 2.0, bg, edge, StrokeKind::Inside);
                 if *intensity != Intensity::Mute {
                     let top = r.bottom() - r.height() * intensity.gain();
@@ -580,7 +577,7 @@ impl Card<'_> {
                     Align2::CENTER_CENTER,
                     &(k + 1).to_string(),
                     theme::font_mono(8.0),
-                    theme::TEXT_FAINT,
+                    t.text_faint,
                     0.0,
                 );
                 if resp.clicked() {
@@ -598,7 +595,7 @@ impl Card<'_> {
             Align2::LEFT_CENTER,
             &self.m.sound_heading,
             theme::font_mono(8.0),
-            theme::TEXT_MUTED,
+            t.text_muted,
             1.0,
         );
         y += SOUND_CAPTION;
@@ -622,11 +619,11 @@ impl Card<'_> {
             let label = self.label(&fill(&self.m.pulse_sound, &[("name", name)]));
             let resp = widgets::toggle(ui, r, id.with(("sound", i)), &label, selected);
             let (bg, edge, text) = if selected {
-                (theme::DOT_INACTIVE, theme::TEXT_FAINT, Color32::WHITE)
+                (t.dot_inactive, t.text_faint, t.strong)
             } else if resp.hovered() {
-                (widgets::HOVER_FILL, theme::BORDER, theme::TEXT_DIM)
+                (t.hover_fill, t.border, t.text_dim)
             } else {
-                (theme::BORDER, theme::BORDER, theme::TEXT_MUTED)
+                (t.border, t.border, t.text_muted)
             };
             painter.rect(r, 4.0, bg, Stroke::new(1.0, edge), StrokeKind::Inside);
             widgets::elided(

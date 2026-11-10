@@ -403,3 +403,29 @@ With the app running (`cargo run --release -p polyrhythmic-metronome-app`) and
    or delete and recreate). Expected: still picked up.
 
 Record the result here: date, macOS version, editor, what differed.
+
+## Theme configuration
+
+### Live theme switch, theme file autocomplete, invalid color
+
+Status: PENDING (owner). The agent only checked that the release build starts
+and creates `themes/` and `schema/theme.schema.json`.
+
+With the app running (`cargo run --release -p polyrhythmic-metronome-app`):
+
+1. Start playing, then edit `config.toml` to `theme = "light"` and save.
+   Expected: the window, the settings popover and the mini window all change
+   to the light theme within about a second, the app keeps playing, and the
+   clicks have no gap or glitch (no new underruns in the footer). Switch back
+   to `"default"`.
+2. Create `themes/nord.toml` (first line `#:schema ../schema/theme.schema.json`)
+   in an editor with the Taplo language server, with `theme = "nord"` in
+   `config.toml`. Expected: the color keys and `mode` autocomplete, and an
+   unknown key or a value that is not a color is flagged. Edit `accent` and
+   save: the app changes color while playing.
+3. Save `themes/nord.toml` with `accent = "orange"`, then `"#12345"`. Expected:
+   the app keeps the previous theme and keeps playing; stderr names the file,
+   the key and the value each time. Copy a real Omarchy `colors.toml` over it:
+   it loads.
+
+Record the result here: date, macOS version, editor, what differed.
