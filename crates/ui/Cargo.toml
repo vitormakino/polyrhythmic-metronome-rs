@@ -16,6 +16,8 @@ workspace = true
 [dependencies]
 egui.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
 polyrhythmic-metronome-core = { path = "../core" }
 polyrhythmic-metronome-audio = { path = "../audio" }
 
