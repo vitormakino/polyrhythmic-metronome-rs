@@ -8,28 +8,9 @@ use egui::{
 };
 use std::sync::Arc;
 
-/// zinc-950, window background.
-pub const BG: Color32 = Color32::from_rgb(0x09, 0x09, 0x0b);
-/// zinc-900, card background.
-pub const CARD: Color32 = Color32::from_rgb(0x18, 0x18, 0x1b);
-/// zinc-800, card and widget borders.
-pub const BORDER: Color32 = Color32::from_rgb(0x27, 0x27, 0x2a);
-/// zinc-700, inactive beat dot.
-pub const DOT_INACTIVE: Color32 = Color32::from_rgb(0x3f, 0x3f, 0x46);
-/// zinc-400, secondary text.
-pub const TEXT_DIM: Color32 = Color32::from_rgb(0xa1, 0xa1, 0xaa);
-/// zinc-500, labels and idle icons.
-pub const TEXT_MUTED: Color32 = Color32::from_rgb(0x71, 0x71, 0x7a);
-/// zinc-600, faint captions.
-pub const TEXT_FAINT: Color32 = Color32::from_rgb(0x52, 0x52, 0x5b);
-/// zinc-100, primary text.
-pub const TEXT: Color32 = Color32::from_rgb(0xf4, 0xf4, 0xf5);
-/// orange-500.
-pub const ACCENT: Color32 = Color32::from_rgb(0xf9, 0x73, 0x16);
-/// orange-300, end of the top accent gradient.
-pub const ACCENT_LIGHT: Color32 = Color32::from_rgb(0xfd, 0xba, 0x74);
+use crate::palette::{Mode, Palette};
 
-/// Pulse colors, cyclic by pulse index.
+/// Pulse colors of the v1 look, cyclic by pulse index.
 pub const PALETTE: [Color32; 6] = [
     Color32::from_rgb(0xf9, 0x73, 0x16),
     Color32::from_rgb(0x3b, 0x82, 0xf6),
@@ -38,6 +19,187 @@ pub const PALETTE: [Color32; 6] = [
     Color32::from_rgb(0xf4, 0x3f, 0x5e),
     Color32::from_rgb(0xea, 0xb3, 0x08),
 ];
+
+/// Every color the views paint with, by role.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Theme {
+    pub mode: Mode,
+    /// Window background.
+    pub bg: Color32,
+    /// Card background.
+    pub card: Color32,
+    /// Card and widget borders.
+    pub border: Color32,
+    /// Inactive beat dot.
+    pub dot_inactive: Color32,
+    /// Primary text.
+    pub text: Color32,
+    /// Secondary text.
+    pub text_dim: Color32,
+    /// Labels and idle icons.
+    pub text_muted: Color32,
+    /// Faint captions.
+    pub text_faint: Color32,
+    /// Text between primary and secondary.
+    pub text_soft: Color32,
+    /// Text of a hovered control.
+    pub text_hot: Color32,
+    /// Fill of a hovered control.
+    pub hover_fill: Color32,
+    pub accent: Color32,
+    /// End of the top accent gradient.
+    pub accent_light: Color32,
+    /// Strongest foreground: BPM digits, topology light, selected number.
+    pub strong: Color32,
+    /// Text on an accent-filled button.
+    pub on_accent: Color32,
+    /// Card drop shadow.
+    pub shadow: Color32,
+    /// Dimming layer behind overlays.
+    pub overlay: Color32,
+    /// Pulse colors, cyclic by pulse index.
+    pub pulses: [Color32; 6],
+}
+
+/// The v1 look, exactly: dark zinc with an orange accent.
+pub const DARK: Theme = Theme {
+    mode: Mode::Dark,
+    bg: Color32::from_rgb(0x09, 0x09, 0x0b),
+    card: Color32::from_rgb(0x18, 0x18, 0x1b),
+    border: Color32::from_rgb(0x27, 0x27, 0x2a),
+    dot_inactive: Color32::from_rgb(0x3f, 0x3f, 0x46),
+    text: Color32::from_rgb(0xf4, 0xf4, 0xf5),
+    text_dim: Color32::from_rgb(0xa1, 0xa1, 0xaa),
+    text_muted: Color32::from_rgb(0x71, 0x71, 0x7a),
+    text_faint: Color32::from_rgb(0x52, 0x52, 0x5b),
+    text_soft: Color32::from_rgb(0xd4, 0xd4, 0xd8),
+    text_hot: Color32::from_rgb(0xe4, 0xe4, 0xe7),
+    hover_fill: Color32::from_rgb(0x2f, 0x2f, 0x33),
+    accent: Color32::from_rgb(0xf9, 0x73, 0x16),
+    accent_light: Color32::from_rgb(0xfd, 0xba, 0x74),
+    strong: Color32::WHITE,
+    on_accent: Color32::WHITE,
+    shadow: Color32::from_black_alpha(90),
+    overlay: Color32::from_black_alpha(51),
+    pulses: PALETTE,
+};
+
+/// Old names for the [`DARK`] colors, until the views read the theme.
+pub const BG: Color32 = DARK.bg;
+pub const CARD: Color32 = DARK.card;
+pub const BORDER: Color32 = DARK.border;
+pub const DOT_INACTIVE: Color32 = DARK.dot_inactive;
+pub const TEXT_DIM: Color32 = DARK.text_dim;
+pub const TEXT_MUTED: Color32 = DARK.text_muted;
+pub const TEXT_FAINT: Color32 = DARK.text_faint;
+pub const TEXT: Color32 = DARK.text;
+pub const ACCENT: Color32 = DARK.accent;
+pub const ACCENT_LIGHT: Color32 = DARK.accent_light;
+
+/// WCAG relative luminance of an sRGB color (0 black, 1 white).
+fn relative_luminance(c: Color32) -> f32 {
+    let lin = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+impl Theme {
+    /// Derives every role from an Omarchy-style palette.
+    pub fn from_palette(p: &Palette) -> Theme {
+        let mix = |a: Color32, b: Color32, t: f32| a.lerp_to_gamma(b, t);
+        let dark = p.mode == Mode::Dark;
+        Theme {
+            mode: p.mode,
+            bg: p.background,
+            card: p.lighter_background,
+            border: p.selection,
+            dot_inactive: p.muted,
+            text: p.foreground,
+            text_soft: mix(p.foreground, p.background, 0.15),
+            text_hot: mix(p.foreground, p.background, 0.07),
+            text_dim: mix(p.foreground, p.background, 0.35),
+            text_muted: p.dark_foreground,
+            text_faint: mix(p.dark_foreground, p.background, 0.3),
+            hover_fill: mix(p.selection, p.muted, 0.4),
+            accent: p.accent,
+            accent_light: mix(p.accent, p.bright_foreground, 0.4),
+            strong: p.bright_foreground,
+            on_accent: if relative_luminance(p.accent) < 0.5 {
+                Color32::WHITE
+            } else {
+                p.background
+            },
+            shadow: Color32::from_black_alpha(if dark { 90 } else { 30 }),
+            overlay: Color32::from_black_alpha(if dark { 51 } else { 20 }),
+            pulses: [p.orange, p.blue, p.green, p.magenta, p.red, p.yellow],
+        }
+    }
+
+    /// The embedded theme called `name`, if any.
+    pub fn builtin(name: &str) -> Option<Theme> {
+        match name {
+            "default" => Some(DARK),
+            "light" => Some(Theme::from_palette(&Palette::LIGHT)),
+            _ => None,
+        }
+    }
+
+    /// The color to paint a pulse whose stored color is `stored`: a color that
+    /// came from the v1 palette follows its slot in this theme.
+    pub fn pulse_color(&self, stored: [u8; 3]) -> Color32 {
+        PALETTE
+            .iter()
+            .position(|c| [c.r(), c.g(), c.b()] == stored)
+            .map_or(Color32::from_rgb(stored[0], stored[1], stored[2]), |i| {
+                self.pulses[i]
+            })
+    }
+
+    /// The egui visuals (panels, windows, widgets) for this theme.
+    pub fn visuals(&self) -> Visuals {
+        let mut v = match self.mode {
+            Mode::Dark => Visuals::dark(),
+            Mode::Light => Visuals::light(),
+        };
+        v.panel_fill = self.bg;
+        v.window_fill = self.card;
+        v.window_stroke = Stroke::new(1.0, self.border);
+        v.extreme_bg_color = self.bg;
+        v.faint_bg_color = self.card;
+        v.override_text_color = Some(self.text);
+        v.hyperlink_color = self.accent;
+        v.selection.bg_fill = self.accent.gamma_multiply(0.35);
+        v.selection.stroke = Stroke::new(1.0, self.accent);
+        let radius = CornerRadius::same(12);
+        for w in [
+            &mut v.widgets.noninteractive,
+            &mut v.widgets.inactive,
+            &mut v.widgets.hovered,
+            &mut v.widgets.active,
+            &mut v.widgets.open,
+        ] {
+            w.corner_radius = radius;
+        }
+        v.widgets.noninteractive.bg_fill = self.card;
+        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, self.border);
+        v.widgets.inactive.bg_fill = self.card;
+        v.widgets.inactive.weak_bg_fill = self.card;
+        v.widgets.inactive.bg_stroke = Stroke::new(1.0, self.border);
+        v.widgets.hovered.bg_fill = self.border;
+        v.widgets.hovered.weak_bg_fill = self.border;
+        v.widgets.hovered.bg_stroke = Stroke::new(1.0, self.dot_inactive);
+        v.widgets.active.bg_fill = self.dot_inactive;
+        v.widgets.active.weak_bg_fill = self.dot_inactive;
+        v.widgets.active.bg_stroke = Stroke::new(1.0, self.accent);
+        v
+    }
+}
 
 /// Corner radius of cards (Tailwind `rounded-3xl`).
 pub const CARD_RADIUS: u8 = 24;
@@ -137,45 +299,15 @@ fn fonts() -> FontDefinitions {
     fonts
 }
 
-fn visuals() -> Visuals {
-    let mut v = Visuals::dark();
-    v.panel_fill = BG;
-    v.window_fill = CARD;
-    v.window_stroke = Stroke::new(1.0, BORDER);
-    v.extreme_bg_color = BG;
-    v.faint_bg_color = CARD;
-    v.override_text_color = Some(TEXT);
-    v.hyperlink_color = ACCENT;
-    v.selection.bg_fill = ACCENT.gamma_multiply(0.35);
-    v.selection.stroke = Stroke::new(1.0, ACCENT);
-    let radius = CornerRadius::same(12);
-    for w in [
-        &mut v.widgets.noninteractive,
-        &mut v.widgets.inactive,
-        &mut v.widgets.hovered,
-        &mut v.widgets.active,
-        &mut v.widgets.open,
-    ] {
-        w.corner_radius = radius;
-    }
-    v.widgets.noninteractive.bg_fill = CARD;
-    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
-    v.widgets.inactive.bg_fill = CARD;
-    v.widgets.inactive.weak_bg_fill = CARD;
-    v.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
-    v.widgets.hovered.bg_fill = BORDER;
-    v.widgets.hovered.weak_bg_fill = BORDER;
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, DOT_INACTIVE);
-    v.widgets.active.bg_fill = DOT_INACTIVE;
-    v.widgets.active.weak_bg_fill = DOT_INACTIVE;
-    v.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
-    v
+/// Makes `theme` the egui visuals of `ctx`.
+pub fn apply(ctx: &egui::Context, theme: &Theme) {
+    ctx.set_visuals(theme.visuals());
 }
 
 /// Install fonts and the dark visuals. Call once at startup.
 pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
-    ctx.set_visuals(visuals());
+    apply(ctx, &DARK);
 }
 
 /// `color` with its alpha replaced by `alpha` (0..=1).
@@ -322,4 +454,54 @@ pub fn paint_top_accent(painter: &Painter, rect: Rect) {
     paint_clipped_band(painter, inner, f32::from(CARD_RADIUS) - 1.0, band, |x| {
         left.lerp_to_gamma(right, (x - inner.min.x) / inner.width())
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dark_keeps_the_v1_colors() {
+        assert_eq!(DARK.bg, Color32::from_rgb(0x09, 0x09, 0x0b));
+        assert_eq!(DARK.text_soft, Color32::from_rgb(0xd4, 0xd4, 0xd8));
+        assert_eq!(DARK.pulses, PALETTE);
+        assert_eq!(BG, DARK.bg, "old constants still point at DARK");
+    }
+
+    #[test]
+    fn from_palette_maps_roles() {
+        let t = Theme::from_palette(&Palette::LIGHT);
+        assert_eq!(t.bg, Palette::LIGHT.background);
+        assert_eq!(t.card, Palette::LIGHT.lighter_background);
+        assert_eq!(t.pulses[0], Palette::LIGHT.orange);
+        assert_eq!(t.strong, Palette::LIGHT.bright_foreground);
+        assert_eq!(t.mode, Mode::Light);
+    }
+
+    #[test]
+    fn pulse_colors_follow_the_palette_slot() {
+        let light = Theme::builtin("light").unwrap();
+        assert_eq!(light.pulse_color([0xf9, 0x73, 0x16]), light.pulses[0]);
+        assert_eq!(light.pulse_color([0x3b, 0x82, 0xf6]), light.pulses[1]);
+        assert_eq!(light.pulse_color([1, 2, 3]), Color32::from_rgb(1, 2, 3));
+        assert_eq!(DARK.pulse_color([0x3b, 0x82, 0xf6]), DARK.pulses[1]);
+    }
+
+    #[test]
+    fn on_accent_stays_readable() {
+        let mut p = Palette::DEFAULT;
+        p.accent = Color32::from_rgb(0xff, 0xf0, 0x80); // light yellow accent
+        assert_eq!(Theme::from_palette(&p).on_accent, p.background);
+        assert_eq!(
+            Theme::from_palette(&Palette::DEFAULT).on_accent,
+            Color32::WHITE
+        );
+    }
+
+    #[test]
+    fn builtins() {
+        assert_eq!(Theme::builtin("default"), Some(DARK));
+        assert!(Theme::builtin("light").is_some());
+        assert!(Theme::builtin("omarchy").is_none());
+    }
 }
