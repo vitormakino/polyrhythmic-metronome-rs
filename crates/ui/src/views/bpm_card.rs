@@ -5,14 +5,14 @@ use std::time::Instant;
 
 use egui::style::HandleShape;
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Role, Sense, Slider, Stroke, StrokeKind, Ui,
+    Align2, CornerRadius, FontId, Pos2, Rect, Role, Sense, Slider, Stroke, StrokeKind, Ui,
     UiBuilder, Vec2, WidgetInfo, pos2, vec2,
 };
 use pm_core::Bpm;
 
 use super::widgets;
 use crate::state::{UiAction, UiState, WindowMode};
-use crate::theme;
+use crate::theme::{self, Theme};
 
 /// Draws the tempo card in `rect`. `wide` picks the roomy variant (72 pt
 /// number); otherwise it is compact (56 pt). Edits `state.bpm`/`state.mode`
@@ -25,9 +25,10 @@ pub(crate) fn bpm_card(
     wide: bool,
     actions: &mut Vec<UiAction>,
 ) {
+    let t = state.theme.clone();
     let painter = ui.painter().clone();
-    theme::paint_card(&painter, rect, theme::BORDER, 0.0);
-    theme::paint_top_accent(&painter, rect);
+    theme::paint_card(&painter, &t, rect, t.border, 0.0);
+    theme::paint_top_accent(&painter, &t, rect);
     let pad = if wide { 24.0 } else { 16.0 };
     let inner = rect.shrink2(vec2(pad, if wide { 20.0 } else { 14.0 }));
 
@@ -41,7 +42,7 @@ pub(crate) fn bpm_card(
         Align2::LEFT_CENTER,
         &state.messages.tempo_heading,
         theme::font_mono(11.0),
-        theme::TEXT_MUTED,
+        t.text_muted,
         2.0,
     );
     let tap_rect = Rect::from_center_size(pos2(inner.right() - 24.0, header_y), vec2(48.0, 22.0));
@@ -60,8 +61,8 @@ pub(crate) fn bpm_card(
     painter.rect(
         tap_shape,
         4.0,
-        theme::with_alpha(theme::ACCENT, 0.1),
-        Stroke::new(1.0, theme::with_alpha(theme::ACCENT, 0.2)),
+        theme::with_alpha(t.accent, 0.1),
+        Stroke::new(1.0, theme::with_alpha(t.accent, 0.2)),
         StrokeKind::Inside,
     );
     widgets::text(
@@ -70,7 +71,7 @@ pub(crate) fn bpm_card(
         Align2::CENTER_CENTER,
         &state.messages.tap.to_uppercase(),
         theme::font_mono_medium(10.0),
-        theme::with_alpha(theme::ACCENT, if tap.hovered() { 1.0 } else { 0.8 }),
+        theme::with_alpha(t.accent, if tap.hovered() { 1.0 } else { 0.8 }),
         1.0,
     );
     if tap.clicked() {
@@ -88,13 +89,13 @@ pub(crate) fn bpm_card(
         true,
     );
     if pin.hovered() {
-        painter.rect_filled(pin_rect, 6.0, theme::BORDER);
+        painter.rect_filled(pin_rect, 6.0, t.border);
     }
     widgets::mini_window(
         &painter,
         pin_rect.center(),
         16.0,
-        widgets::idle_color(&pin, theme::TEXT_MUTED),
+        widgets::idle_color(&t, &pin, t.text_muted),
     );
     if pin.clicked() {
         state.mode = match state.mode {
@@ -127,7 +128,7 @@ pub(crate) fn bpm_card(
     let mut value = i32::from(state.bpm.get());
     let changed = ui
         .scope_builder(UiBuilder::new().max_rect(slider_rect), |ui| {
-            style_slider(ui, slider_rect.width());
+            style_slider(ui, &t, slider_rect.width());
             ui.name_inputs(&state.messages.bpm, |ui| {
                 ui.add(
                     Slider::new(&mut value, i32::from(Bpm::MIN)..=i32::from(Bpm::MAX))
@@ -157,6 +158,7 @@ pub(super) fn bpm_stepper(
 ) -> Rect {
     let painter = ui.painter().clone();
     let m = state.messages.clone();
+    let t = state.theme.clone();
     let digits = widgets::text_width(&painter, "300", font.clone(), -2.0);
     widgets::text(
         &painter,
@@ -164,7 +166,7 @@ pub(super) fn bpm_stepper(
         Align2::CENTER_CENTER,
         &state.bpm.get().to_string(),
         font.clone(),
-        Color32::WHITE,
+        t.strong,
         -2.0,
     );
     let gap = (step * 0.5).min(24.0);
@@ -181,14 +183,14 @@ pub(super) fn bpm_stepper(
             true,
         );
         if resp.hovered() {
-            painter.circle_filled(c, step / 2.0, theme::BORDER);
+            painter.circle_filled(c, step / 2.0, t.border);
         }
         let at_limit = (delta < 0 && state.bpm.get() == Bpm::MIN)
             || (delta > 0 && state.bpm.get() == Bpm::MAX);
         let color = if at_limit {
-            theme::DOT_INACTIVE
+            t.dot_inactive
         } else {
-            widgets::idle_color(&resp, theme::TEXT_DIM)
+            widgets::idle_color(&t, &resp, t.text_dim)
         };
         if delta < 0 {
             widgets::minus(&painter, c, icon, color);
@@ -263,19 +265,19 @@ pub(super) fn set_bpm(state: &mut UiState, value: i32, actions: &mut Vec<UiActio
 }
 
 /// Web look for the range input: thin zinc-800 rail, orange fill and knob.
-fn style_slider(ui: &mut Ui, width: f32) {
+fn style_slider(ui: &mut Ui, t: &Theme, width: f32) {
     let style = ui.style_mut();
     style.spacing.slider_width = width;
     style.spacing.slider_rail_height = 4.0;
     style.spacing.interact_size.y = 20.0;
-    style.visuals.selection.bg_fill = theme::ACCENT;
+    style.visuals.selection.bg_fill = t.accent;
     let w = &mut style.visuals.widgets;
     // The rail is painted with `inactive.bg_fill`.
-    w.inactive.bg_fill = theme::BORDER;
+    w.inactive.bg_fill = t.border;
     w.inactive.corner_radius = CornerRadius::same(2);
-    w.inactive.fg_stroke = Stroke::new(1.0, theme::ACCENT);
-    w.hovered.fg_stroke = Stroke::new(1.0, theme::ACCENT_LIGHT);
-    w.active.fg_stroke = Stroke::new(1.0, theme::ACCENT_LIGHT);
-    w.hovered.bg_fill = theme::ACCENT;
-    w.active.bg_fill = theme::ACCENT;
+    w.inactive.fg_stroke = Stroke::new(1.0, t.accent);
+    w.hovered.fg_stroke = Stroke::new(1.0, t.accent_light);
+    w.active.fg_stroke = Stroke::new(1.0, t.accent_light);
+    w.hovered.bg_fill = t.accent;
+    w.active.bg_fill = t.accent;
 }

@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use crate::palette::{Mode, Palette};
 
-/// Pulse colors of the v1 look, cyclic by pulse index.
-pub const PALETTE: [Color32; 6] = [
+/// Pulse colors of the v1 look, cyclic by pulse index. Stored pulse colors
+/// equal to one of these follow their slot in the active theme.
+const V1_PULSES: [Color32; 6] = [
     Color32::from_rgb(0xf9, 0x73, 0x16),
     Color32::from_rgb(0x3b, 0x82, 0xf6),
     Color32::from_rgb(0x10, 0xb9, 0x81),
@@ -81,20 +82,8 @@ pub const DARK: Theme = Theme {
     on_accent: Color32::WHITE,
     shadow: Color32::from_black_alpha(90),
     overlay: Color32::from_black_alpha(51),
-    pulses: PALETTE,
+    pulses: V1_PULSES,
 };
-
-/// Old names for the [`DARK`] colors, until the views read the theme.
-pub const BG: Color32 = DARK.bg;
-pub const CARD: Color32 = DARK.card;
-pub const BORDER: Color32 = DARK.border;
-pub const DOT_INACTIVE: Color32 = DARK.dot_inactive;
-pub const TEXT_DIM: Color32 = DARK.text_dim;
-pub const TEXT_MUTED: Color32 = DARK.text_muted;
-pub const TEXT_FAINT: Color32 = DARK.text_faint;
-pub const TEXT: Color32 = DARK.text;
-pub const ACCENT: Color32 = DARK.accent;
-pub const ACCENT_LIGHT: Color32 = DARK.accent_light;
 
 /// WCAG relative luminance of an sRGB color (0 black, 1 white).
 fn relative_luminance(c: Color32) -> f32 {
@@ -153,7 +142,7 @@ impl Theme {
     /// The color to paint a pulse whose stored color is `stored`: a color that
     /// came from the v1 palette follows its slot in this theme.
     pub fn pulse_color(&self, stored: [u8; 3]) -> Color32 {
-        PALETTE
+        V1_PULSES
             .iter()
             .position(|c| [c.r(), c.g(), c.b()] == stored)
             .map_or(Color32::from_rgb(stored[0], stored[1], stored[2]), |i| {
@@ -328,13 +317,14 @@ pub fn glow_layer_count(intensity: f32) -> usize {
 /// Card with the web look: zinc-900 fill, 1 px border, rounded-3xl, a dark
 /// drop shadow, and a colored halo (`0 0 20px color33`) scaled by `glow` (0..=1).
 /// `border` is also the glow color.
-pub fn paint_card(painter: &Painter, rect: Rect, border: Color32, glow: f32) {
-    paint_card_with_radius(painter, rect, border, glow, CARD_RADIUS);
+pub fn paint_card(painter: &Painter, theme: &Theme, rect: Rect, border: Color32, glow: f32) {
+    paint_card_with_radius(painter, theme, rect, border, glow, CARD_RADIUS);
 }
 
 /// [`paint_card`] with another corner radius (pulse cards use 16, `rounded-2xl`).
 pub fn paint_card_with_radius(
     painter: &Painter,
+    theme: &Theme,
     rect: Rect,
     border: Color32,
     glow: f32,
@@ -352,7 +342,7 @@ pub fn paint_card_with_radius(
             offset: [0, 10],
             blur: 40,
             spread: 0,
-            color: Color32::from_black_alpha(90),
+            color: theme.shadow,
         }
         .as_shape(rect, radius),
     );
@@ -367,11 +357,11 @@ pub fn paint_card_with_radius(
             .as_shape(rect, radius),
         );
     }
-    painter.rect_filled(rect, radius, CARD);
+    painter.rect_filled(rect, radius, theme.card);
     let stroke_color = if glow > 0.0 {
-        BORDER.lerp_to_gamma(border, glow)
+        theme.border.lerp_to_gamma(border, glow)
     } else {
-        BORDER
+        theme.border
     };
     painter.rect_stroke(
         rect,
@@ -446,11 +436,11 @@ pub fn paint_band(painter: &Painter, card: Rect, radius: f32, band: Rect, color:
 /// 4 px orange-500 to orange-300 gradient line along the top edge of a card
 /// (inside its 1 px border), at 50 % opacity, clipped to the card's rounded
 /// top corners like the web's `overflow-hidden`.
-pub fn paint_top_accent(painter: &Painter, rect: Rect) {
+pub fn paint_top_accent(painter: &Painter, theme: &Theme, rect: Rect) {
     let inner = rect.shrink(1.0);
     let band = Rect::from_min_size(inner.min, egui::vec2(inner.width(), 4.0));
-    let left = with_alpha(ACCENT, 0.5);
-    let right = with_alpha(ACCENT_LIGHT, 0.5);
+    let left = with_alpha(theme.accent, 0.5);
+    let right = with_alpha(theme.accent_light, 0.5);
     paint_clipped_band(painter, inner, f32::from(CARD_RADIUS) - 1.0, band, |x| {
         left.lerp_to_gamma(right, (x - inner.min.x) / inner.width())
     });
@@ -462,10 +452,36 @@ mod tests {
 
     #[test]
     fn dark_keeps_the_v1_colors() {
-        assert_eq!(DARK.bg, Color32::from_rgb(0x09, 0x09, 0x0b));
-        assert_eq!(DARK.text_soft, Color32::from_rgb(0xd4, 0xd4, 0xd8));
-        assert_eq!(DARK.pulses, PALETTE);
-        assert_eq!(BG, DARK.bg, "old constants still point at DARK");
+        let rgb = Color32::from_rgb;
+        assert_eq!(DARK.mode, Mode::Dark);
+        assert_eq!(DARK.bg, rgb(0x09, 0x09, 0x0b));
+        assert_eq!(DARK.card, rgb(0x18, 0x18, 0x1b));
+        assert_eq!(DARK.border, rgb(0x27, 0x27, 0x2a));
+        assert_eq!(DARK.dot_inactive, rgb(0x3f, 0x3f, 0x46));
+        assert_eq!(DARK.text, rgb(0xf4, 0xf4, 0xf5));
+        assert_eq!(DARK.text_dim, rgb(0xa1, 0xa1, 0xaa));
+        assert_eq!(DARK.text_muted, rgb(0x71, 0x71, 0x7a));
+        assert_eq!(DARK.text_faint, rgb(0x52, 0x52, 0x5b));
+        assert_eq!(DARK.text_soft, rgb(0xd4, 0xd4, 0xd8));
+        assert_eq!(DARK.text_hot, rgb(0xe4, 0xe4, 0xe7));
+        assert_eq!(DARK.hover_fill, rgb(0x2f, 0x2f, 0x33));
+        assert_eq!(DARK.accent, rgb(0xf9, 0x73, 0x16));
+        assert_eq!(DARK.accent_light, rgb(0xfd, 0xba, 0x74));
+        assert_eq!(DARK.strong, Color32::WHITE);
+        assert_eq!(DARK.on_accent, Color32::WHITE);
+        assert_eq!(DARK.shadow, Color32::from_black_alpha(90));
+        assert_eq!(DARK.overlay, Color32::from_black_alpha(51));
+        assert_eq!(
+            DARK.pulses,
+            [
+                rgb(0xf9, 0x73, 0x16),
+                rgb(0x3b, 0x82, 0xf6),
+                rgb(0x10, 0xb9, 0x81),
+                rgb(0xa8, 0x55, 0xf7),
+                rgb(0xf4, 0x3f, 0x5e),
+                rgb(0xea, 0xb3, 0x08),
+            ]
+        );
     }
 
     #[test]

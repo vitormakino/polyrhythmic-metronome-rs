@@ -264,7 +264,8 @@ fn snapshot(name: &str, mut state: UiState, size: f32, hits: &[(usize, u32, u64)
         .renderer(renderer)
         .build_ui_state(
             move |ui, state: &mut UiState| {
-                ui.painter().rect_filled(ui.max_rect(), 0.0, theme::CARD);
+                ui.painter()
+                    .rect_filled(ui.max_rect(), 0.0, theme::DARK.card);
                 topology(ui, state, size);
             },
             state,

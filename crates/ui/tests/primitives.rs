@@ -1,6 +1,6 @@
 use egui::{Color32, Pos2, Rect, Sense, Vec2};
 use egui_kittest::{Harness, SnapshotOptions, wgpu::WgpuTestRenderer};
-use pm_ui::theme;
+use pm_ui::theme::{self, DARK};
 
 /// Per ruling R3: without a wgpu adapter the snapshot is skipped, not failed.
 fn renderer() -> Option<WgpuTestRenderer> {
@@ -14,19 +14,19 @@ fn renderer() -> Option<WgpuTestRenderer> {
 fn scene(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(520.0, 220.0), Sense::hover());
     let painter = ui.painter();
-    painter.rect_filled(rect, 0.0, theme::BG);
+    painter.rect_filled(rect, 0.0, DARK.bg);
     let left = Rect::from_min_size(rect.min + Vec2::new(20.0, 20.0), Vec2::new(230.0, 180.0));
     let right = Rect::from_min_size(rect.min + Vec2::new(270.0, 20.0), Vec2::new(230.0, 180.0));
-    theme::paint_card(painter, left, theme::PALETTE[1], 0.0);
-    theme::paint_top_accent(painter, left);
-    theme::paint_card(painter, right, theme::PALETTE[0], 1.0);
-    theme::paint_top_accent(painter, right);
+    theme::paint_card(painter, &DARK, left, DARK.pulses[1], 0.0);
+    theme::paint_top_accent(painter, &DARK, left);
+    theme::paint_card(painter, &DARK, right, DARK.pulses[0], 1.0);
+    theme::paint_top_accent(painter, &DARK, right);
     let c = left.center();
-    theme::paint_glow(painter, c, 20.0, theme::PALETTE[1], 0.0);
-    painter.circle_filled(c, 10.0, theme::DOT_INACTIVE);
+    theme::paint_glow(painter, c, 20.0, DARK.pulses[1], 0.0);
+    painter.circle_filled(c, 10.0, DARK.dot_inactive);
     let c = right.center();
-    theme::paint_glow(painter, c, 20.0, theme::PALETTE[0], 1.0);
-    painter.circle_filled(c, 10.0, theme::PALETTE[0]);
+    theme::paint_glow(painter, c, 20.0, DARK.pulses[0], 1.0);
+    painter.circle_filled(c, 10.0, DARK.pulses[0]);
     painter.text(
         Pos2::new(left.center().x, left.max.y - 30.0),
         egui::Align2::CENTER_CENTER,

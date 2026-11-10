@@ -20,23 +20,22 @@ pub(crate) const HEIGHT: f32 = 20.0;
 /// Largest visual offset the slider allows (ms).
 pub const MAX_VISUAL_OFFSET_MS: u32 = 500;
 
-const ROSE: egui::Color32 = theme::PALETTE[4];
-
 pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiAction>) {
     let painter = ui.painter().clone();
     let m = state.messages.clone();
+    let t = state.theme.clone();
     let font = theme::font_mono(10.0);
     let cy = rect.center().y;
     let mut x = rect.left() + 4.0;
     let mut status = |ui: &Ui, key: &str, text: &str, hover: Option<&str>| {
-        painter.circle_filled(pos2(x + 3.0, cy), 3.0, ROSE);
+        painter.circle_filled(pos2(x + 3.0, cy), 3.0, t.pulses[4]);
         let r = widgets::text(
             &painter,
             pos2(x + 12.0, cy),
             Align2::LEFT_CENTER,
             text,
             font.clone(),
-            theme::TEXT_MUTED,
+            t.text_muted,
             0.5,
         );
         let node = Rect::from_min_max(pos2(x, rect.top()), pos2(r.right(), rect.bottom()));
@@ -66,16 +65,16 @@ pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
     let open = Popup::is_id_open(ui.ctx(), id.with("popup"));
     let resp = widgets::toggle(ui, gear, id, &m.settings, open);
     if resp.hovered() || open {
-        ui.painter().rect_filled(gear, 6.0, theme::BORDER);
+        ui.painter().rect_filled(gear, 6.0, t.border);
     }
     widgets::settings(
         ui.painter(),
         gear.center(),
         14.0,
         if open {
-            theme::ACCENT
+            t.accent
         } else {
-            widgets::idle_color(&resp, theme::TEXT_MUTED)
+            widgets::idle_color(&t, &resp, t.text_muted)
         },
     );
     Popup::from_toggle_button_response(&resp)
@@ -84,8 +83,8 @@ pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
         .gap(6.0)
         .frame(
             Frame::new()
-                .fill(theme::CARD)
-                .stroke(Stroke::new(1.0, theme::BORDER))
+                .fill(t.card)
+                .stroke(Stroke::new(1.0, t.border))
                 .corner_radius(CornerRadius::same(12))
                 .inner_margin(Margin::same(12)),
         )
@@ -93,6 +92,7 @@ pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
 }
 
 fn offset_slider(ui: &mut Ui, state: &mut UiState, label: &str, actions: &mut Vec<UiAction>) {
+    let t = state.theme.clone();
     let (title, _) = ui.allocate_exact_size(vec2(200.0, 14.0), Sense::hover());
     widgets::text(
         ui.painter(),
@@ -100,7 +100,7 @@ fn offset_slider(ui: &mut Ui, state: &mut UiState, label: &str, actions: &mut Ve
         Align2::LEFT_CENTER,
         &label.to_uppercase(),
         theme::font_mono(9.0),
-        theme::TEXT_MUTED,
+        t.text_muted,
         1.5,
     );
     ui.add_space(4.0);

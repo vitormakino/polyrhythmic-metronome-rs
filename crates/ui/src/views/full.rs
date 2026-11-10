@@ -9,9 +9,7 @@
 use std::time::Instant;
 
 use egui::epaint::Shadow;
-use egui::{
-    Align2, Color32, CornerRadius, Rect, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2,
-};
+use egui::{Align2, CornerRadius, Rect, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2};
 use pm_core::MAX_PULSES;
 
 use super::bpm_card::bpm_card;
@@ -32,8 +30,9 @@ const GAP: f32 = 12.0;
 /// `now` timestamps taps.
 pub fn full_view(ui: &mut Ui, state: &mut UiState, now: Instant) -> Vec<UiAction> {
     let mut actions = Vec::new();
+    let t = state.theme.clone();
     let screen = ui.max_rect();
-    ui.painter().rect_filled(screen, 0.0, theme::BG);
+    ui.painter().rect_filled(screen, 0.0, t.bg);
     let mut layout = Layout::new(screen);
 
     top_bar(ui, layout.top, state, layout.wide);
@@ -148,22 +147,18 @@ impl Layout {
 }
 
 fn top_bar(ui: &Ui, rect: Rect, state: &UiState, wide: bool) {
+    let t = &state.theme;
     let painter = ui.painter_at(rect);
     let icon = if wide { 20.0 } else { 16.0 };
     let cy = rect.center().y;
-    widgets::zap(
-        &painter,
-        pos2(rect.left() + icon / 2.0, cy),
-        icon,
-        theme::ACCENT,
-    );
+    widgets::zap(&painter, pos2(rect.left() + icon / 2.0, cy), icon, t.accent);
     let title = widgets::text(
         &painter,
         pos2(rect.left() + icon + 8.0, cy),
         Align2::LEFT_CENTER,
         &state.messages.app_heading,
         theme::font_bold(if wide { 20.0 } else { 14.0 }),
-        theme::TEXT,
+        t.text,
         0.0,
     );
     let right = rect.right();
@@ -176,7 +171,7 @@ fn top_bar(ui: &Ui, rect: Rect, state: &UiState, wide: bool) {
                 Align2::RIGHT_CENTER,
                 name,
                 theme::font_mono(10.0),
-                theme::TEXT_FAINT,
+                t.text_faint,
                 max,
             );
         }
@@ -184,6 +179,7 @@ fn top_bar(ui: &Ui, rect: Rect, state: &UiState, wide: bool) {
 }
 
 fn topology_card(ui: &mut Ui, rect: Rect, state: &UiState) {
+    let t = &state.theme;
     if rect.width() < 1.0 {
         return;
     }
@@ -191,8 +187,8 @@ fn topology_card(ui: &mut Ui, rect: Rect, state: &UiState) {
     painter.rect(
         rect,
         CornerRadius::same(theme::CARD_RADIUS),
-        theme::with_alpha(theme::CARD, 0.4),
-        Stroke::new(1.0, theme::with_alpha(theme::BORDER, 0.5)),
+        theme::with_alpha(t.card, 0.4),
+        Stroke::new(1.0, theme::with_alpha(t.border, 0.5)),
         StrokeKind::Inside,
     );
     let mut inner = rect.shrink(rect.width() * 0.06);
@@ -203,7 +199,7 @@ fn topology_card(ui: &mut Ui, rect: Rect, state: &UiState) {
             Align2::CENTER_CENTER,
             &state.messages.topology.to_uppercase(),
             theme::font_mono(9.0),
-            theme::TEXT_FAINT,
+            t.text_faint,
             3.6,
         );
         inner = inner.shrink(12.0);
@@ -216,6 +212,7 @@ fn topology_card(ui: &mut Ui, rect: Rect, state: &UiState) {
 }
 
 fn pulses_header(ui: &Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiAction>) {
+    let t = state.theme.clone();
     let painter = ui.painter();
     widgets::text(
         painter,
@@ -223,7 +220,7 @@ fn pulses_header(ui: &Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiA
         Align2::LEFT_CENTER,
         &state.messages.active_pulses,
         theme::font_mono(10.0),
-        theme::TEXT_MUTED,
+        t.text_muted,
         2.0,
     );
     let font = theme::font_semibold(10.0);
@@ -241,23 +238,15 @@ fn pulses_header(ui: &Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiA
         &m.add_pulse,
         enabled,
     );
-    let fill = if resp.hovered() {
-        theme::BORDER
-    } else {
-        theme::CARD
-    };
+    let fill = if resp.hovered() { t.border } else { t.card };
     painter.rect(
         r,
         r.height() / 2.0,
         fill,
-        Stroke::new(1.0, theme::BORDER),
+        Stroke::new(1.0, t.border),
         StrokeKind::Inside,
     );
-    let color = if enabled {
-        widgets::TEXT_SOFT
-    } else {
-        theme::DOT_INACTIVE
-    };
+    let color = if enabled { t.text_soft } else { t.dot_inactive };
     widgets::plus(painter, pos2(r.left() + 18.0, r.center().y), 12.0, color);
     widgets::text(
         painter,
@@ -281,6 +270,7 @@ pub(super) fn play_button(
     wide: bool,
     actions: &mut Vec<UiAction>,
 ) {
+    let t = state.theme.clone();
     let m = &state.messages;
     let label = if state.playing { &m.stop } else { &m.play };
     let resp = widgets::button(ui, rect, ui.make_persistent_id("play"), label, true);
@@ -295,11 +285,11 @@ pub(super) fn play_button(
         painter.rect(
             shape,
             radius,
-            theme::BORDER,
-            Stroke::new(1.0, theme::with_alpha(theme::ACCENT, 0.3)),
+            t.border,
+            Stroke::new(1.0, theme::with_alpha(t.accent, 0.3)),
             StrokeKind::Inside,
         );
-        (theme::ACCENT, m.stop.to_uppercase())
+        (t.accent, m.stop.to_uppercase())
     } else {
         let glow = if resp.hovered() { 0.3 } else { 0.2 };
         painter.add(
@@ -307,12 +297,12 @@ pub(super) fn play_button(
                 offset: [0, 0],
                 blur: 40,
                 spread: 0,
-                color: theme::with_alpha(theme::ACCENT, glow),
+                color: theme::with_alpha(t.accent, glow),
             }
             .as_shape(shape, radius),
         );
-        painter.rect_filled(shape, radius, theme::ACCENT);
-        (Color32::WHITE, m.play.to_uppercase())
+        painter.rect_filled(shape, radius, t.accent);
+        (t.on_accent, m.play.to_uppercase())
     };
     let font = theme::font_bold(if wide { 20.0 } else { 18.0 });
     let text_w = widgets::text_width(painter, &text, font.clone(), 1.0);

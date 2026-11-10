@@ -27,8 +27,9 @@ const PLAY_H: f32 = 40.0;
 /// (the window is transparent) holding topology, BPM and Play/Stop.
 pub fn mini_view(ui: &mut Ui, state: &mut UiState, _now: Instant) -> Vec<UiAction> {
     let mut actions = Vec::new();
+    let t = state.theme.clone();
     let card = ui.max_rect();
-    theme::paint_card(ui.painter(), card, theme::BORDER, 0.0);
+    theme::paint_card(ui.painter(), &t, card, t.border, 0.0);
     let inner = card.shrink(PAD);
 
     let play = Rect::from_min_max(pos2(inner.left(), inner.bottom() - PLAY_H), inner.max);
@@ -68,13 +69,13 @@ pub fn mini_view(ui: &mut Ui, state: &mut UiState, _now: Instant) -> Vec<UiActio
         true,
     );
     if resp.hovered() {
-        ui.painter().rect_filled(expand, 6.0, theme::BORDER);
+        ui.painter().rect_filled(expand, 6.0, t.border);
     }
     widgets::mini_window(
         ui.painter(),
         expand.center(),
         14.0,
-        widgets::idle_color(&resp, theme::TEXT_MUTED),
+        widgets::idle_color(&t, &resp, t.text_muted),
     );
     if resp.clicked() {
         state.mode = WindowMode::Full;

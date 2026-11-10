@@ -7,7 +7,7 @@ use egui_kittest::{Harness, SnapshotOptions, wgpu::WgpuTestRenderer};
 use pm_core::{Bpm, Pattern};
 use pm_ui::i18n::Messages;
 use pm_ui::state::{UiAction, UiState, WindowMode};
-use pm_ui::theme;
+use pm_ui::theme::{self, Theme};
 use pm_ui::views::mini::{DEFAULT_SIZE, MIN_SIZE, mini_view};
 
 /// The v1 snapshots are Brazilian Portuguese; they must not change.
@@ -26,9 +26,13 @@ fn harness_with(
     state: UiState,
     renderer: Option<WgpuTestRenderer>,
 ) -> Harness<'static, App> {
+    let active = state.theme.clone();
     let mut builder = Harness::builder()
         .with_size(size)
-        .with_context_setup(theme::install);
+        .with_context_setup(move |ctx| {
+            theme::install(ctx);
+            theme::apply(ctx, &active);
+        });
     if let Some(renderer) = renderer {
         builder = builder.renderer(renderer);
     }
@@ -210,4 +214,11 @@ fn mini_many() {
 #[test]
 fn mini_default_en() {
     snapshot("mini_default_en", UiState::default());
+}
+
+#[test]
+fn mini_light() {
+    let mut state = UiState::default();
+    state.theme = Arc::new(Theme::builtin("light").unwrap());
+    snapshot("mini_light", state);
 }

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::i18n::Messages;
 use crate::spring::Spring;
+use crate::theme::{DARK, Theme};
 
 /// Most beats queued for [`UiState::advance`]; older ones are dropped
 /// (e.g. while the window is hidden and nothing advances).
@@ -78,6 +79,9 @@ pub struct UiState {
     /// Every text the views show. Assigning a new value switches the language;
     /// no action is involved.
     pub messages: Arc<Messages>,
+    /// Every color the views paint with. Assigning a new value switches the
+    /// theme (call `theme::apply` too, for the egui visuals); no action is involved.
+    pub theme: Arc<Theme>,
 }
 
 impl Default for UiState {
@@ -99,6 +103,7 @@ impl Default for UiState {
             settings_open: HashSet::new(),
             dragging: None,
             messages: Arc::new(Messages::english()),
+            theme: Arc::new(DARK),
         }
     }
 }

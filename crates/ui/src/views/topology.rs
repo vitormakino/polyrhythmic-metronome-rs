@@ -9,7 +9,7 @@
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
-use egui::{Align2, Color32, Pos2, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo, pos2};
+use egui::{Align2, Pos2, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo, pos2};
 
 use super::widgets;
 use crate::state::UiState;
@@ -113,6 +113,7 @@ pub fn topology(ui: &mut Ui, state: &UiState, size: f32) {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     response.widget_info(|| WidgetInfo::labeled(Role::Image, true, &state.messages.topology));
     let painter = ui.painter_at(rect);
+    let t = state.theme.clone();
 
     let strip = strip_height(size);
     let area = size - strip;
@@ -125,17 +126,10 @@ pub fn topology(ui: &mut Ui, state: &UiState, size: f32) {
     let gap = ring_gap(pulses.len(), layout_size);
 
     let flash = state.downbeat_flash();
-    theme::paint_glow(
-        &painter,
-        center,
-        layout_size * 0.4,
-        Color32::WHITE,
-        0.6 * flash,
-    );
+    theme::paint_glow(&painter, center, layout_size * 0.4, t.strong, 0.6 * flash);
 
     for (pulse, ring) in pulses.iter().zip(&rings) {
-        let [r, g, b] = pulse.color;
-        let color = Color32::from_rgb(r, g, b);
+        let color = t.pulse_color(pulse.color);
         let opacity = if pulse.enabled { 1.0 } else { 0.2 };
         let beats = pulse.beats.max(1);
 
@@ -144,7 +138,7 @@ pub fn topology(ui: &mut Ui, state: &UiState, size: f32) {
             .collect();
         painter.extend(Shape::dashed_line(
             &circle,
-            Stroke::new(1.0, theme::with_alpha(theme::BORDER, 0.5 * opacity)),
+            Stroke::new(1.0, theme::with_alpha(t.border, 0.5 * opacity)),
             4.0,
             4.0,
         ));
@@ -168,7 +162,7 @@ pub fn topology(ui: &mut Ui, state: &UiState, size: f32) {
             let v = state.dot(pulse.id, i);
             let at = point(i);
             let radius = idle + (lit - idle) * v;
-            let fill = theme::DOT_INACTIVE.lerp_to_gamma(color, v.clamp(0.0, 1.0));
+            let fill = t.dot_inactive.lerp_to_gamma(color, v.clamp(0.0, 1.0));
             if v > 0.05 {
                 theme::paint_glow(&painter, at, radius * 2.6, color, 0.7 * v.min(1.0));
             }
@@ -186,6 +180,7 @@ fn indicators(painter: &egui::Painter, rect: egui::Rect, strip: f32, size: f32, 
     const GAP: f32 = 6.0;
     const BETWEEN: f32 = 20.0;
     let m = &state.messages;
+    let t = &state.theme;
     let font = theme::font_mono(8.0);
     let y = rect.bottom() - strip / 2.0;
     let coincidence_w = widgets::text_width(painter, &m.coincidence, font.clone(), SPACING);
@@ -205,10 +200,10 @@ fn indicators(painter: &egui::Painter, rect: egui::Rect, strip: f32, size: f32, 
     let lit = state.coincidence();
     let light = pos2(x + light_w / 2.0, y);
     if lit {
-        theme::paint_glow(painter, light, 9.0, Color32::WHITE, 1.0);
-        painter.circle_filled(light, LIGHT * 1.25, Color32::WHITE);
+        theme::paint_glow(painter, light, 9.0, t.strong, 1.0);
+        painter.circle_filled(light, LIGHT * 1.25, t.strong);
     } else {
-        painter.circle_filled(light, LIGHT, theme::BORDER);
+        painter.circle_filled(light, LIGHT, t.border);
     }
     x += light_w + GAP;
     widgets::text(
@@ -217,7 +212,7 @@ fn indicators(painter: &egui::Painter, rect: egui::Rect, strip: f32, size: f32, 
         Align2::LEFT_CENTER,
         &m.coincidence,
         font.clone(),
-        theme::TEXT_MUTED,
+        t.text_muted,
         SPACING,
     );
     if both {
@@ -228,15 +223,15 @@ fn indicators(painter: &egui::Painter, rect: egui::Rect, strip: f32, size: f32, 
             Align2::LEFT_CENTER,
             &m.engine,
             font,
-            theme::TEXT_MUTED,
+            t.text_muted,
             SPACING,
         );
         let light = pos2(x + engine_w + GAP + light_w / 2.0, y);
         if state.playing {
-            theme::paint_glow(painter, light, 8.0, theme::ACCENT, 0.8);
-            painter.circle_filled(light, LIGHT, theme::ACCENT);
+            theme::paint_glow(painter, light, 8.0, t.accent, 0.8);
+            painter.circle_filled(light, LIGHT, t.accent);
         } else {
-            painter.circle_filled(light, LIGHT, theme::DOT_INACTIVE);
+            painter.circle_filled(light, LIGHT, t.dot_inactive);
         }
     }
 }
