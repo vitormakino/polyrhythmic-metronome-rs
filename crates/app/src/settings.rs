@@ -1,5 +1,5 @@
-//! What survives a restart: pattern, tempo, window mode and rects, and the
-//! visual offset per output device. Stored as TOML in
+//! What survives a restart: pattern, tempo, window mode and rects, the
+//! visual offset per output device and the selected practice session. Stored as TOML in
 //! `dirs::data_dir()/polyrhythmic-metronome/settings.toml`.
 
 use std::collections::BTreeMap;
@@ -28,6 +28,8 @@ pub struct Settings {
     pub mini_rect: Option<[f32; 4]>,
     /// Visual offset in ms by output device UID.
     pub visual_offsets: BTreeMap<String /*device uid*/, u32 /*ms*/>,
+    /// Name of the selected practice session; `None` is "No session".
+    pub session: Option<String>,
 }
 
 impl Default for Settings {
@@ -39,6 +41,7 @@ impl Default for Settings {
             full_rect: None,
             mini_rect: None,
             visual_offsets: BTreeMap::new(),
+            session: None,
         }
     }
 }
@@ -85,6 +88,7 @@ impl Settings {
             full_rect: field(&table, "full_rect").and_then(|r| valid_rect(r, FULL_MIN_SIZE)),
             mini_rect: field(&table, "mini_rect").and_then(|r| valid_rect(r, mini::MIN_SIZE)),
             visual_offsets,
+            session: field(&table, "session"),
         }
     }
 
@@ -160,6 +164,7 @@ mod tests {
                 ("ExampleUSBInterface:1,2".to_owned(), 12),
                 ("BuiltInSpeakerDevice".to_owned(), 0),
             ]),
+            session: Some("Warm-up".to_owned()),
         }
     }
 
@@ -175,6 +180,18 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, vec![std::ffi::OsString::from(FILE)]);
+    }
+
+    #[test]
+    fn session_selection_roundtrips() {
+        let dir = TempDir::new();
+        let mut s = Settings::default();
+        assert_eq!(s.session, None);
+        s.save(&dir.0).unwrap();
+        assert_eq!(Settings::load(&dir.0).session, None, "no session");
+        s.session = Some("Warm-up \"fast\"".to_owned());
+        s.save(&dir.0).unwrap();
+        assert_eq!(Settings::load(&dir.0), s);
     }
 
     #[test]
@@ -222,10 +239,13 @@ mod tests {
         let text = std::fs::read_to_string(dir.0.join(FILE)).unwrap();
         let text = text.replace("bpm = 187", "bpm = \"fast\"");
         let text = text.replace("mode = \"Mini\"", "mode = \"Huge\"");
+        let text = text.replace("session = \"Warm-up\"", "session = 7");
+        assert!(text.contains("session = 7"));
         write(&dir.0, &text);
         let loaded = Settings::load(&dir.0);
         assert_eq!(loaded.bpm, Bpm::new(120));
         assert_eq!(loaded.mode, WindowMode::Full);
+        assert_eq!(loaded.session, None);
         assert_eq!(loaded.pattern, good.pattern);
         assert_eq!(loaded.full_rect, good.full_rect);
         assert_eq!(loaded.visual_offsets, good.visual_offsets);

@@ -35,10 +35,11 @@ pub fn view_actions(ui: &mut UiState, remote: Remote) -> Vec<UiAction> {
             actions.push(UiAction::TogglePlay);
         }
         Remote::BpmStep(step) => {
-            let bpm = Bpm::new(i32::from(ui.bpm.get()) + step);
-            if bpm != ui.bpm {
-                ui.bpm = bpm;
-                actions.push(UiAction::SetBpm(bpm));
+            // The tempo shown moves, a running session's included.
+            let shown = ui.shown_bpm();
+            let bpm = Bpm::new(i32::from(shown.get()) + step);
+            if bpm != shown {
+                ui.set_shown_bpm(bpm, &mut actions);
             }
         }
         Remote::Tap(pressed) => ui.tap(pressed, &mut actions),
@@ -93,6 +94,45 @@ mod tests {
         assert_eq!(ui.bpm, Bpm::new(300));
         ui.bpm = Bpm::new(40);
         assert!(view_actions(&mut ui, Remote::BpmStep(-1)).is_empty());
+    }
+
+    #[test]
+    fn bpm_steps_during_session_move_the_effective_tempo() {
+        use pm_core::MAX_PULSES;
+        use pm_core::session::{OnFinish, Runner, SessionPlan, Span, Stage};
+
+        let plan = SessionPlan {
+            name: "warm".into(),
+            stages: vec![Stage {
+                length: Span::Bars(2),
+                tempo: None,
+                mute: None,
+                random_mute: None,
+                pulses: [None; MAX_PULSES],
+            }],
+            on_finish: OnFinish::Stop,
+            show_muted_visuals: false,
+            seed: 1,
+        };
+        let mut runner = Runner::start(&plan, Bpm::new(100), 48_000, 0);
+        runner.bar(&plan, 0);
+        let mut progress = runner.progress();
+        progress.moment.bpm = Bpm::new(110);
+        let mut ui = UiState::default();
+        ui.bpm = Bpm::new(100);
+        ui.playing = true;
+        ui.session_progress = Some(progress);
+
+        assert_eq!(
+            view_actions(&mut ui, Remote::BpmStep(1)),
+            [UiAction::SetBpm(Bpm::new(111))]
+        );
+        assert_eq!((ui.bpm, ui.shown_bpm()), (Bpm::new(101), Bpm::new(111)));
+        assert_eq!(
+            view_actions(&mut ui, Remote::BpmStep(-2)),
+            [UiAction::SetBpm(Bpm::new(109))]
+        );
+        assert_eq!((ui.bpm, ui.shown_bpm()), (Bpm::new(99), Bpm::new(109)));
     }
 
     #[test]

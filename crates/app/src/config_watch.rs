@@ -68,8 +68,7 @@ impl Default for Loader {
 pub struct Appearance {
     pub messages: Arc<Messages>,
     pub theme: Arc<Theme>,
-    /// The session list; the interface starts using it with the session strip.
-    #[allow(dead_code)]
+    /// The sessions the user can pick, in the order shown.
     pub sessions: Arc<[SessionEntry]>,
 }
 

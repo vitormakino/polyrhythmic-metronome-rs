@@ -174,6 +174,16 @@ valid version (or is not listed if it never was valid) and its file, line and
 problem go to stderr; an edit takes effect the next time the session starts,
 never in one that is running.
 
+Pick a session in the list above the pulses and press Play (the button, the
+menu bar item or the hotkey): it starts on the "one". While it runs, the
+screen shows the session's tempo, and the tempo controls and the menu bar's
+BPM items move it by the same amount they would move your own. A session never
+changes your setup: on Stop, or when it ends with `on_finish = "stop"`, the
+tempo and pulses go back to yours, plus any change you made during the
+session. The selected
+session is remembered across restarts. Manual checks for sessions are in
+[docs/VERIFICATION.md](docs/VERIFICATION.md#practice-sessions).
+
 The app writes JSON Schemas to `schema/` (only when their content changes) and
 the files point to them with `#:schema` directives. Autocomplete and
 validation need an editor with the Taplo TOML language server (Even Better
