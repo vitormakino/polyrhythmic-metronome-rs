@@ -64,10 +64,12 @@ impl Messages {
 
     /// The embedded messages for `code`, if it is one of [`BUILTIN`].
     pub fn builtin(code: &str) -> Option<Messages> {
-        match code {
-            "en" => Some(Messages::english()),
-            "pt-BR" => Some(toml::from_str(PT_BR_TOML).expect("embedded pt-BR.toml is valid")),
-            _ => None,
+        if code.eq_ignore_ascii_case("en") {
+            Some(Messages::english())
+        } else if code.eq_ignore_ascii_case("pt-BR") {
+            Some(toml::from_str(PT_BR_TOML).expect("embedded pt-BR.toml is valid"))
+        } else {
+            None
         }
     }
 }
@@ -198,6 +200,13 @@ pub fn locale_schema() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_codes_match_ignoring_case() {
+        let r = resolve("pt-br", None);
+        assert_eq!(r.messages, Messages::builtin("pt-BR").unwrap());
+        assert!(r.warnings.is_empty());
+    }
 
     #[test]
     fn builtins_parse_strictly_and_have_the_same_placeholders() {

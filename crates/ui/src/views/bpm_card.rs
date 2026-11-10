@@ -68,7 +68,7 @@ pub(crate) fn bpm_card(
         &painter,
         tap_shape.center(),
         Align2::CENTER_CENTER,
-        &state.messages.tap,
+        &state.messages.tap.to_uppercase(),
         theme::font_mono_medium(10.0),
         theme::with_alpha(theme::ACCENT, if tap.hovered() { 1.0 } else { 0.8 }),
         1.0,
@@ -173,7 +173,13 @@ pub(super) fn bpm_stepper(
     for (label, delta) in [(&m.bpm_decrease, -1), (&m.bpm_increase, 1)] {
         let c = center + vec2(offset * delta as f32, 0.0);
         let r = Rect::from_center_size(c, Vec2::splat(step));
-        let resp = widgets::button(ui, r, ui.make_persistent_id(label.as_str()), label, true);
+        let resp = widgets::button(
+            ui,
+            r,
+            ui.make_persistent_id(("bpm-step", delta)),
+            label,
+            true,
+        );
         if resp.hovered() {
             painter.circle_filled(c, step / 2.0, theme::BORDER);
         }

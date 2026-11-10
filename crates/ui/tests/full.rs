@@ -107,9 +107,9 @@ fn bpm_stays_in_range() {
 fn tap_sets_bpm() {
     let mut h = harness(MEDIUM, UiState::default());
     let t0 = h.state().now;
-    click(&mut h, "TAP");
+    click(&mut h, "Tap");
     h.state_mut().now = t0 + Duration::from_millis(600);
-    click(&mut h, "TAP");
+    click(&mut h, "Tap");
     assert_eq!(h.state().ui.bpm.get(), 100);
     let taps = h
         .state()
@@ -322,7 +322,7 @@ fn no_overlap_at_minimum_size() {
     click(&mut h, "Pulse 1: settings");
     let labels = [
         "BPM",
-        "TAP",
+        "Tap",
         "Add pulse",
         "Play",
         "Pin mini",
@@ -488,8 +488,13 @@ fn full_large_many() {
 fn switching_the_language_relabels_the_view() {
     let mut h = harness(MEDIUM, UiState::default());
     h.get_by_label("Add pulse");
+    h.state_mut().actions.clear();
     h.state_mut().ui.messages = Arc::new(Messages::builtin("pt-BR").unwrap());
     h.run();
+    assert!(
+        h.state().actions.is_empty(),
+        "a language switch emits no UiAction"
+    );
     assert!(h.query_by_label("Add pulse").is_none());
     h.get_by_label("Adicionar pulso");
     h.get_by_label("Pulso 1: remover");

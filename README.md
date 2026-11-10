@@ -107,7 +107,9 @@ the English text.
 The app writes JSON Schemas to `schema/` (only when their content changes) and
 the files point to them with `#:schema` directives. Autocomplete and
 validation need an editor with the Taplo TOML language server (Even Better
-TOML in VS Code, Helix, Neovim with `taplo`).
+TOML in VS Code, Helix, Neovim with `taplo`). To check that Taplo is active, type
+`lang` in `config.toml`: `language` should complete, and `language = "de/x"`
+should be underlined.
 
 ## Project layout
 

@@ -83,7 +83,7 @@ struct App {
     remote_rx: Receiver<Remote>,
     /// New messages from the config watcher (the language changed).
     config_rx: Receiver<Arc<Messages>>,
-    /// "Sair" was chosen: let the next close request through.
+    /// "Quit" was chosen: let the next close request through.
     quitting: bool,
 }
 

@@ -115,7 +115,7 @@
       "type": "string"
     },
     "tap": {
-      "description": "TAP",
+      "description": "Tap",
       "type": "string"
     },
     "tempo_heading": {

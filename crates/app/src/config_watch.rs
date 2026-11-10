@@ -29,6 +29,8 @@ pub struct Loader {
     config: Config,
     /// Language the current `messages` were built for.
     shown: String,
+    /// Diagnostics of the previous reload, to report only what changes.
+    reported: Vec<String>,
     pub messages: Arc<Messages>,
 }
 
@@ -37,6 +39,7 @@ impl Default for Loader {
         let config = Config::default();
         Loader {
             shown: config.language.clone(),
+            reported: Vec::new(),
             config,
             messages: Arc::new(Messages::english()),
         }
@@ -47,7 +50,8 @@ impl Default for Loader {
 pub struct Reload {
     /// The new messages; `Some` only when the text changed.
     pub messages: Option<Arc<Messages>>,
-    /// One line per problem, each naming the file.
+    /// One line per problem, each naming the file. Empty when the problems
+    /// are the same as in the previous reload.
     pub diagnostics: Vec<String>,
 }
 
@@ -75,28 +79,35 @@ impl Loader {
         // `parse` only lets valid codes through, so this never leaves `locales/`.
         let language = self.config.language.clone();
         let locale_path = dir.join("locales").join(format!("{language}.toml"));
+        let mut unusable = false;
         let text = match read(&locale_path) {
             Ok(text) => Some(text),
             Err(e) if e.kind() == io::ErrorKind::NotFound => None,
             Err(e) => {
                 diagnostics.push(format!("{}: {e}", locale_path.display()));
+                unusable = true;
                 None
             }
         };
         let resolved = resolve(&language, text.as_deref());
-        diagnostics.extend(
-            resolved
-                .warnings
-                .iter()
-                .map(|w| format!("{}: {w}", locale_path.display())),
-        );
-        let syntax_error = resolved
+        // An unreadable file already has its diagnostic; "unknown language"
+        // would be misleading.
+        if !unusable {
+            diagnostics.extend(
+                resolved
+                    .warnings
+                    .iter()
+                    .map(|w| format!("{}: {w}", locale_path.display())),
+            );
+        }
+        unusable |= resolved
             .warnings
             .iter()
             .any(|w| w.starts_with(SYNTAX_ERROR));
-        // A syntax error in the language file makes `resolve` return the
-        // base; keep what was showing when the language did not change.
-        let messages = if syntax_error && language == self.shown {
+        // A language file that cannot be read or parsed makes `resolve`
+        // return the base; keep what was showing when the language did not
+        // change.
+        let messages = if unusable && language == self.shown {
             None
         } else {
             let new = Arc::new(resolved.messages);
@@ -108,6 +119,11 @@ impl Loader {
                 Some(new)
             }
         };
+        if diagnostics == self.reported {
+            diagnostics.clear();
+        } else {
+            self.reported = diagnostics.clone();
+        }
         Reload {
             messages,
             diagnostics,
@@ -259,6 +275,41 @@ mod tests {
         assert!(r.diagnostics[0].contains("de.toml"));
     }
 
+    #[test]
+    fn same_diagnostics_are_not_reported_twice() {
+        let mut l = Loader::default();
+        let read = files(&[("/c/config.toml", "language = \"de\"\nfoo = 1")]);
+        let first = l.reload(&read, Path::new("/c"));
+        assert!(!first.diagnostics.is_empty());
+        let second = l.reload(&read, Path::new("/c"));
+        assert!(second.diagnostics.is_empty(), "{:?}", second.diagnostics);
+    }
+
+    #[test]
+    fn unreadable_locale_keeps_the_previous_messages_and_names_the_error() {
+        let mut l = Loader::default();
+        let cfg = ("/c/config.toml", "language = \"de\"");
+        l.reload(
+            &files(&[cfg, ("/c/locales/de.toml", "add_pulse = \"Puls\"")]),
+            Path::new("/c"),
+        );
+        let list = [cfg];
+        let ok = files(&list);
+        let read = move |p: &Path| {
+            if p.ends_with("de.toml") {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied"))
+            } else {
+                ok(p)
+            }
+        };
+        let r = l.reload(&read, Path::new("/c"));
+        assert!(r.messages.is_none());
+        assert_eq!(l.messages.add_pulse, "Puls");
+        assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
+        assert!(r.diagnostics[0].contains("de.toml"));
+        assert!(r.diagnostics[0].contains("denied"));
+    }
+
     struct TempDir(PathBuf);
 
     impl TempDir {
@@ -307,5 +358,13 @@ mod tests {
         fs::remove_file(dir.0.join("config.toml")).unwrap();
         let m = rx.recv_timeout(wait).expect("delete delivers messages");
         assert_eq!(m.add_pulse, "Add pulse");
+
+        // The watch is certainly active by now: a rename save must be seen.
+        fs::write(&tmp, "language = \"pt-BR\"").unwrap();
+        fs::rename(&tmp, dir.0.join("config.toml")).unwrap();
+        let m = rx
+            .recv_timeout(wait)
+            .expect("second rename save delivers messages");
+        assert_eq!(m.add_pulse, "Adicionar pulso");
     }
 }
