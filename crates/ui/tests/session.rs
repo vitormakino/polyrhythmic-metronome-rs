@@ -384,6 +384,25 @@ fn strip_describes_the_running_stage() {
 }
 
 #[test]
+fn strip_follows_the_running_plan_not_the_file() {
+    let mut edited = plan("Ramp");
+    edited.stages[0].length = Span::Bars(4);
+    let mut state = running(plan("Ramp"), |p| p.bars_in_stage = 5);
+    state.running_plan = Some(entry(plan("Ramp")));
+    state.sessions = vec![entry(edited)].into();
+    let mut h = harness(MEDIUM, state);
+    assert!(h.query_by_label_contains("bar 6/8").is_some());
+    assert!(h.query_by_label_contains("bar 4/4").is_none());
+
+    // The file is gone: still the running session, by name.
+    h.state_mut().ui.sessions = vec![entry(plan("Other"))].into();
+    h.run();
+    assert!(h.query_by_label_contains("Stage 1/3 · bar 6/8").is_some());
+    assert!(h.query_by_value("Ramp").is_some(), "the selector names it");
+    assert!(h.query_by_value("No session").is_none());
+}
+
+#[test]
 fn finished_session_shows_the_summary() {
     let mut state = running(plan("Ramp"), |p| {
         p.finished = true;

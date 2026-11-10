@@ -89,20 +89,23 @@ impl Controller {
     /// Stop nothing stays lit, and Play never shows a stale beat.
     ///
     /// Play sends the selected session's plan as it is now (`None` without
-    /// one), so an edited session file counts from the next Play, and
-    /// forgets the last summary. Stop after a session sends the base tempo
+    /// one), so an edited session file counts from the next Play, keeps it
+    /// as `ui.running_plan` and forgets the last summary. Stop after a session sends the base tempo
     /// back.
     pub fn set_playing(&mut self, audio: &mut impl Audio, playing: bool) {
         self.ui.playing = playing;
         self.ui.clear_beats();
         if playing {
-            let plan = self
-                .ui
-                .selected_session()
-                .map(|entry| Box::new((*entry.plan).clone()));
-            self.session_running = plan.is_some();
             self.ui.session_summary = None;
             self.ui.session_progress = None;
+            // A selection whose file is gone was kept for the summary.
+            self.drop_missing_selection();
+            let entry = self.ui.selected_session().cloned();
+            let plan = entry.as_ref().map(|e| Box::new((*e.plan).clone()));
+            self.session_running = plan.is_some();
+            // What the strip and the muted visuals follow until the next
+            // Play, whatever happens to the file meanwhile.
+            self.ui.running_plan = entry;
             self.push(audio, Outgoing::Command(Command::Session(plan)));
             self.push(audio, Outgoing::Command(Command::Play));
         } else {
@@ -148,7 +151,8 @@ impl Controller {
     }
 
     /// New session list from the config files. A selected session that is
-    /// gone becomes "No session", but not while it runs.
+    /// gone becomes "No session", but not while it runs or its summary
+    /// shows (`ui.running_plan` describes it meanwhile).
     pub fn set_sessions(&mut self, sessions: Arc<[SessionEntry]>) {
         self.ui.sessions = sessions;
         self.drop_missing_selection();
@@ -164,11 +168,11 @@ impl Controller {
 
     fn drop_missing_selection(&mut self) {
         if !self.session_running
+            && self.ui.session_summary.is_none()
             && self.ui.session.is_some()
             && self.ui.selected_session().is_none()
         {
             self.ui.session = None;
-            self.ui.session_summary = None;
         }
     }
 
@@ -506,6 +510,67 @@ mod tests {
         }
         assert_eq!(audio.sent, ["UserPulse 1", "Pattern 2"]);
         assert!(c.ui.pulse_shown_enabled(1));
+    }
+
+    /// A muted beat of pulse 0, due now.
+    fn muted_beat(c: &Controller) -> BeatEvent {
+        BeatEvent {
+            pulse: c.ui.pattern.pulses[0].id,
+            beat: 1,
+            frame: 10,
+            at: Instant::now(),
+            muted: true,
+        }
+    }
+
+    #[test]
+    fn the_running_plan_outlives_edits_and_deletion_of_its_file() {
+        let mut warm = plan("warm");
+        warm.stages[0].length = Span::Bars(16);
+        warm.show_muted_visuals = true;
+        let (mut c, mut audio) = with_sessions(None);
+        c.ui.session = Some("warm".into());
+        c.set_sessions(
+            [SessionEntry {
+                name: "warm".into(),
+                plan: Arc::new(warm.clone()),
+            }]
+            .into(),
+        );
+        c.set_playing(&mut audio, true);
+        let running = |c: &Controller| c.ui.shown_session().map(|e| (*e.plan).clone());
+        assert_eq!(running(&c), Some(warm.clone()));
+
+        // The file is edited mid-run: 8 bars, muted visuals off.
+        c.set_sessions(entries(&["warm", "cool"]));
+        assert_eq!(running(&c), Some(warm.clone()), "still the running plan");
+        c.ui.on_beat(&muted_beat(&c));
+        assert_eq!(c.ui.pending_beats(), 1, "muted visuals still shown");
+
+        // Then deleted.
+        c.set_sessions(entries(&["cool"]));
+        assert_eq!(running(&c), Some(warm.clone()));
+        assert_eq!(c.ui.session.as_deref(), Some("warm"));
+        c.ui.on_beat(&muted_beat(&c));
+        assert_eq!(c.ui.pending_beats(), 2);
+
+        // It stops itself: the summary keeps the plan and the selection.
+        let done = progress("warm", |p| p.finished = true);
+        c.sync_session(&mut audio, Some(done), false);
+        assert_eq!(c.ui.session_summary, Some(done));
+        assert_eq!(c.ui.session.as_deref(), Some("warm"));
+        assert_eq!(running(&c), Some(warm));
+        c.set_sessions(entries(&["cool"]));
+        assert_eq!(c.ui.session_summary, Some(done), "a reload keeps it");
+
+        // The next Play finds it gone: no session.
+        audio.sent.clear();
+        c.set_playing(&mut audio, true);
+        assert_eq!(audio.sent, ["Session None", "Play"]);
+        assert_eq!(
+            (c.ui.session.as_deref(), c.ui.shown_session()),
+            (None, None)
+        );
     }
 
     #[test]

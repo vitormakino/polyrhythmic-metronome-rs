@@ -68,7 +68,8 @@ pub fn session_strip(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
     // After the selector: stage and counter while running, or the summary.
     let status_left = combo.right() + 12.0;
     let mut status_right = line.right();
-    let plan = state.selected_session().map(|s| s.plan.clone());
+    // The running plan, not the file's: it may have changed or gone.
+    let plan = state.shown_session().map(|s| s.plan.clone());
     let stage = |p: &SessionProgress| {
         plan.as_ref()
             .and_then(|plan| plan.stages.get((p.stage as usize).checked_sub(1)?))
@@ -143,7 +144,7 @@ fn selector(ui: &mut Ui, rect: Rect, state: &UiState, enabled: bool) -> Option<O
     let t = &state.theme;
     let m = &state.messages;
     let current = state
-        .selected_session()
+        .shown_session()
         .map_or(m.session_none.as_str(), |s| s.name.as_str());
     let mut picked = None;
     ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
@@ -298,7 +299,7 @@ fn describe(m: &Messages, stage: &Stage, moment: &Moment, on_screen: usize) -> V
 /// After the session finished every segment is full; before it starts none is.
 pub(crate) fn stage_bar(painter: &Painter, rect: Rect, state: &UiState) {
     let t = &state.theme;
-    let plan = state.selected_session().map(|s| &s.plan);
+    let plan = state.shown_session().map(|s| &s.plan);
     let active = state.running_session();
     let running = active.filter(|p| !p.finished);
     let stages = active

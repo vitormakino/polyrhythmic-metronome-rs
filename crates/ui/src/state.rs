@@ -107,6 +107,10 @@ pub struct UiState {
     /// The progress of the session that finished, shown until the next Play
     /// or another selection.
     pub session_summary: Option<SessionProgress>,
+    /// The session the last Play started, as it was sent (set by the app).
+    /// While it plays, and with its summary, the views describe it rather
+    /// than the selected entry, whose file may have changed or gone since.
+    pub running_plan: Option<SessionEntry>,
 }
 
 impl Default for UiState {
@@ -133,6 +137,7 @@ impl Default for UiState {
             session: None,
             session_progress: None,
             session_summary: None,
+            running_plan: None,
         }
     }
 }
@@ -149,7 +154,7 @@ impl UiState {
         }
         if ev.muted
             && !self
-                .selected_session()
+                .shown_session()
                 .is_some_and(|s| s.plan.show_muted_visuals)
         {
             return;
@@ -295,6 +300,16 @@ impl UiState {
         self.sessions.iter().find(|s| s.name == name)
     }
 
+    /// The session the views describe: the one the last Play started
+    /// ([`Self::running_plan`]) while playing or showing its summary, else
+    /// the selected one.
+    pub fn shown_session(&self) -> Option<&SessionEntry> {
+        self.running_plan
+            .as_ref()
+            .filter(|_| self.playing || self.session_summary.is_some())
+            .or_else(|| self.selected_session())
+    }
+
     /// The progress of the session playing now. A finished one still counts
     /// while playing (`OnFinish::Continue`): the base setup comes back only on Stop.
     pub fn running_session(&self) -> Option<&SessionProgress> {
@@ -374,11 +389,13 @@ impl UiState {
         }
     }
 
-    /// Selects session `name` (`None`: no session) and forgets the summary.
+    /// Selects session `name` (`None`: no session) and forgets the summary
+    /// and the last run's plan.
     pub(crate) fn select_session(&mut self, name: Option<String>, actions: &mut Vec<UiAction>) {
         if self.session != name {
             self.session = name;
             self.session_summary = None;
+            self.running_plan = None;
             actions.push(UiAction::SelectSession);
         }
     }
