@@ -485,6 +485,7 @@ pub fn session_schema() -> serde_json::Value {
         "title": "Polyrhythmic Metronome practice session",
         "type": "object",
         "additionalProperties": false,
+        "required": ["stage"],
         "properties": {
             "name": { "type": "string", "description": "Name shown in the session list; default is the file name without .toml." },
             "on_finish": { "enum": ["stop", "continue", "repeat"], "description": "What happens after the last stage: stop (default), continue at the last tempo, or repeat from the first stage." },
@@ -732,6 +733,7 @@ random_mute = { percent = 20, increase = 5, every_bars = 4, max = 60 }
         }
         assert_eq!(s["$schema"], "http://json-schema.org/draft-04/schema#");
         assert_eq!(s["additionalProperties"], false);
+        assert!(s["required"].as_array().unwrap().contains(&"stage".into()));
         every_property_has_a_description(&s, "");
         check_or_update("schema/session.schema.json", &s);
     }
