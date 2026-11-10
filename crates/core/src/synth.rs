@@ -36,6 +36,35 @@ impl SampleBank {
     }
 }
 
+/// Two-note rising chime (A5 then E6, ~400 ms) for the end of a session.
+/// Built once, off the real-time thread; mono, peak 0.5.
+pub fn end_chime(sample_rate: u32) -> Vec<f32> {
+    const NOTES: [(f32, f32); 2] = [(880.0, 0.0), (1318.5, 0.15)];
+    const NOTE_LEN: f32 = 0.25;
+    const LEVEL: f32 = 0.5;
+    let sr = sample_rate as f32;
+    let mut clip = vec![0.0_f32; samples(sr, 0.4)];
+    for (freq, start) in NOTES {
+        let first = samples(sr, start);
+        for (n, s) in clip[first..].iter_mut().enumerate() {
+            let t = n as f32 / sr;
+            if t >= NOTE_LEN {
+                break;
+            }
+            // 5 ms attack, exponential decay, linear fade over the last 20 ms.
+            let attack = (t / 0.005).min(1.0);
+            let fade = ((NOTE_LEN - t) / 0.02).min(1.0);
+            *s += (core::f32::consts::TAU * freq * t).sin() * attack * (-t * 14.0).exp() * fade;
+        }
+    }
+    let peak = clip.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+    if peak > 0.0 {
+        let k = LEVEL / peak;
+        clip.iter_mut().for_each(|s| *s *= k);
+    }
+    clip
+}
+
 /// Tiny deterministic xorshift32 PRNG, white noise in [-1, 1).
 struct Noise(u32);
 
@@ -172,6 +201,18 @@ mod tests {
                 assert!(peak <= 0.8 + 1e-6, "{sound:?} accent={accent} peak={peak}");
             }
         }
+    }
+
+    #[test]
+    fn end_chime_shape() {
+        let sr = 48_000;
+        let clip = end_chime(sr);
+        let secs = clip.len() as f32 / sr as f32;
+        assert!((0.3..=0.5).contains(&secs), "len {secs}s");
+        let peak = clip.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.1 && peak <= 0.6, "peak {peak}");
+        let tail = &clip[clip.len() - (sr as usize / 100)..];
+        assert!(tail.iter().all(|s| s.abs() < 0.01), "tail not silent");
     }
 
     #[test]
