@@ -1,7 +1,7 @@
 //! Practice sessions: a staged plan and the pure state machine that plays it.
 //!
 //! A [`SessionPlan`] is a list of [`Stage`]s. Each stage can jump the tempo,
-//! ramp it, mute whole bars on a cycle or at random, and turn individual
+//! ramp it, mute whole bars on a cycle or hits at random, and turn individual
 //! pulses off or muted. The [`Runner`] is driven by the audio engine: it is
 //! called at the exact frame of every reference "one" ([`Runner::bar`]) and,
 //! for smooth ramps, at every beat of pulse 1 ([`Runner::beat`]). It is `Copy`
@@ -56,8 +56,10 @@ pub struct MuteCycle {
     pub mute: Span,
 }
 
-/// Mutes a share of the bars at random: `percent`, plus `increase` every
-/// `every_bars` bars, capped at `max`. `increase == 0` keeps it fixed.
+/// Mutes hits at random: each instant with hits (all pulses hitting at the
+/// same frame share one draw) is muted with a chance of `percent`, plus
+/// `increase` every `every_bars` bars, capped at `max`. `increase == 0`
+/// keeps it fixed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RandomMute {
     pub percent: u8,
@@ -117,7 +119,8 @@ pub struct Moment {
     pub pulses: PulseMask,
     /// The whole bar is muted by the stage's mute cycle.
     pub silent: bool,
-    /// Chance, in percent, of each pulse's bar being randomly muted.
+    /// Chance, in percent, of each instant with hits being randomly muted
+    /// (one draw for all the pulses hitting at that frame).
     pub random_percent: u8,
 }
 
@@ -285,6 +288,8 @@ impl Runner {
             finished: false,
         };
         r.begin_stage(plan, 0, frame, base);
+        // The base is never played when stage 1 jumps away from it.
+        r.max_bpm = r.current;
         r
     }
 
@@ -361,7 +366,7 @@ impl Runner {
     }
 
     /// One random-mute draw: true with probability `percent` / 100. A
-    /// xorshift64* stream seeded from the plan, so a seed replays the same bars.
+    /// xorshift64* stream seeded from the plan, so a seed replays the same draws.
     pub fn draw(&mut self, percent: u8) -> bool {
         let mut x = self.rng;
         x ^= x >> 12;

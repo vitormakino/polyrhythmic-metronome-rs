@@ -463,3 +463,18 @@ fn user_bpm_below_a_reached_limit_holds_for_smooth_ramps() {
     assert_eq!(r.bar(&p, 41 * BAR).0.bpm.get(), 100);
     assert_eq!(r.bar(&p, 42 * BAR).0.bpm.get(), 101, "next whole step");
 }
+
+#[test]
+fn max_bpm_counts_from_the_first_stage_start() {
+    // Base 120, stage 1 jumps to 80 and ramps to 100: 120 was never played.
+    let mut s = ramp_stage(Span::Bars(30), 5, Span::Bars(1), Some(100), false);
+    s.tempo.as_mut().unwrap().jump = Some(Jump::To(Bpm::new(80)));
+    let p = plan(vec![s], OnFinish::Stop);
+    let mut r = Runner::start(&p, Bpm::new(120), SR, 0);
+    assert_eq!(r.progress().max_bpm.get(), 80);
+    for i in 0..10 {
+        r.bar(&p, i * BAR);
+    }
+    assert_eq!(r.progress().moment.bpm.get(), 100);
+    assert_eq!(r.progress().max_bpm.get(), 100);
+}
