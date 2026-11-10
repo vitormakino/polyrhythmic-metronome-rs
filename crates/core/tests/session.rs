@@ -374,3 +374,59 @@ fn runner_is_copy_and_small() {
     is_copy::<Runner>();
     assert!(std::mem::size_of::<Runner>() < 512);
 }
+
+#[test]
+fn user_bpm_below_a_reached_limit_holds_then_ramp_continues() {
+    let p = plan(
+        vec![ramp_stage(
+            Span::Bars(1000),
+            2,
+            Span::Bars(4),
+            Some(106),
+            false,
+        )],
+        OnFinish::Stop,
+    );
+    let mut r = Runner::start(&p, Bpm::new(100), SR, 0);
+    for i in 0..=40u64 {
+        r.bar(&p, i * BAR);
+    }
+    assert_eq!(r.progress().moment.bpm.get(), 106);
+    r.user_bpm(Bpm::new(100));
+    let got: Vec<u16> = (41..=44u64)
+        .map(|i| r.bar(&p, i * BAR).0.bpm.get())
+        .collect();
+    assert_eq!(
+        got,
+        [100, 100, 100, 102],
+        "holds, then steps from the user's tempo"
+    );
+    let last = (45..=70u64).map(|i| r.bar(&p, i * BAR).0.bpm.get()).last();
+    assert_eq!(last, Some(106), "the limit still clamps");
+}
+
+#[test]
+fn user_bpm_below_a_reached_limit_holds_for_smooth_ramps() {
+    let p = plan(
+        vec![ramp_stage(
+            Span::Bars(1000),
+            2,
+            Span::Bars(4),
+            Some(106),
+            true,
+        )],
+        OnFinish::Stop,
+    );
+    let mut r = Runner::start(&p, Bpm::new(100), SR, 0);
+    for i in 0..=40u64 {
+        r.bar(&p, i * BAR);
+    }
+    assert_eq!(r.progress().moment.bpm.get(), 106);
+    r.user_bpm(Bpm::new(100));
+    for beat in 1..4u32 {
+        let f = 40 * BAR + u64::from(beat) * BAR / 4;
+        assert_eq!(r.beat(&p, f, beat, 4).bpm.get(), 100);
+    }
+    assert_eq!(r.bar(&p, 41 * BAR).0.bpm.get(), 100);
+    assert_eq!(r.bar(&p, 42 * BAR).0.bpm.get(), 101, "next whole step");
+}

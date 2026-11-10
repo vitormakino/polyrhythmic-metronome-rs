@@ -159,6 +159,8 @@ pub struct Runner {
     current: Bpm,
     /// Tempo the ramp counts from; the user's changes shift it.
     origin: i32,
+    /// What the ramp added to `origin` at the latest bar or beat, before clamping.
+    ramp_delta: i32,
     /// Tempo `Repeat` restarts from: the start base plus the user's changes.
     base: i32,
     max_bpm: Bpm,
@@ -190,6 +192,7 @@ impl Runner {
             last_frame: frame,
             current: base,
             origin: i32::from(base.get()),
+            ramp_delta: 0,
             base: i32::from(base.get()),
             max_bpm: base,
             rng: if plan.seed == 0 {
@@ -266,7 +269,9 @@ impl Runner {
     /// The user set the effective tempo: the ramp continues from there.
     pub fn user_bpm(&mut self, effective: Bpm) {
         let shift = i32::from(effective.get()) - i32::from(self.current.get());
-        self.origin = self.origin.saturating_add(shift);
+        // Re-anchor on the delta the ramp applies now, not on the clamped
+        // tempo: past a limit the two differ and the ramp would snap back.
+        self.origin = i32::from(effective.get()).saturating_sub(self.ramp_delta);
         self.base = self.base.saturating_add(shift);
         self.set_current(effective);
     }
@@ -381,6 +386,7 @@ impl Runner {
             None => running,
         };
         self.origin = i32::from(Bpm::new(start).get());
+        self.ramp_delta = 0;
         self.set_current(Bpm::new(start));
         self.mask = stage.map_or(PulseMask::default(), |s| {
             let mut m = PulseMask::default();
@@ -442,6 +448,7 @@ impl Runner {
             (false, Span::Bars(_)) => change * (bars / every),
             (false, Span::Seconds(_)) => change * (frames / sr / every),
         };
+        self.ramp_delta = delta.clamp(i128::from(i32::MIN), i128::from(i32::MAX)) as i32;
         let mut bpm = i128::from(self.origin) + delta;
         if let Some(limit) = ramp.limit {
             let limit = i128::from(limit.get());
