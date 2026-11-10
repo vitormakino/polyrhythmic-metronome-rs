@@ -375,6 +375,48 @@ fn rebuild_keeps_a_play_sent_after_a_session_stopped_itself() {
 }
 
 #[test]
+fn progress_of_a_run_not_started_yet_is_hidden() {
+    let p = Pattern::default();
+    let first = init(&p, 120);
+    let mut t = Transport::new(&first);
+    let (mut a, mut ha) = Engine::new(SR, 1, first);
+    let short = || {
+        let mut plan = two_stage_plan();
+        plan.stages.truncate(1);
+        Box::new(plan)
+    };
+    assert_eq!(t.session_progress(&ha.session), None, "nothing ran yet");
+    send(&mut t, &mut ha, Command::Session(Some(short())));
+    send(&mut t, &mut ha, Command::Play);
+    assert_eq!(t.session_progress(&ha.session), None, "Play not taken");
+    render(&mut a, &mut ha, 400);
+    let done = t.session_progress(&ha.session).expect("the finished run");
+    assert!(done.finished);
+
+    // Played again: until the engine takes the Play, the finished progress
+    // in the cell is the previous run's.
+    send(&mut t, &mut ha, Command::Stop);
+    send(&mut t, &mut ha, Command::Session(Some(short())));
+    send(&mut t, &mut ha, Command::Play);
+    assert!(ha.session.latest().unwrap().finished, "stale in the cell");
+    assert_eq!(t.session_progress(&ha.session), None);
+    render(&mut a, &mut ha, 1);
+    let fresh = t.session_progress(&ha.session).expect("the new run");
+    assert!(!fresh.finished);
+
+    // A rebuilt engine counts its own Plays.
+    let snap = ha.position.snapshot();
+    let rebuilt = t.resume_init_with(snap, &ha.session);
+    t.engine_replaced();
+    let (mut b, mut hb) = Engine::new(SR, 1, rebuilt);
+    render(&mut b, &mut hb, 1);
+    assert!(t.session_progress(&hb.session).is_some());
+    send(&mut t, &mut hb, Command::Stop);
+    send(&mut t, &mut hb, Command::Play);
+    assert_eq!(t.session_progress(&hb.session), None);
+}
+
+#[test]
 #[ignore = "plays about 2 s of clicks on the default output device"]
 fn real_device_smoke() {
     let mut service = AudioService::start(init(&Pattern::default(), 120)).expect("audio service");

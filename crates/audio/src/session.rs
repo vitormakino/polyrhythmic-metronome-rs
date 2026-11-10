@@ -64,7 +64,8 @@ impl SessionWriter {
 impl SessionReader {
     /// The latest progress the engine published: at every reference beat
     /// while a session runs, and when it finishes. `None` until a session
-    /// runs, and again after a `Play` without a plan.
+    /// runs, and again from each `Play` that starts a run until that run's
+    /// first bar (for good after a `Play` without a plan).
     pub fn latest(&self) -> Option<SessionProgress> {
         self.latest_at().1.map(|(_, progress)| progress)
     }

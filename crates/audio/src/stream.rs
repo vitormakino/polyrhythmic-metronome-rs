@@ -14,7 +14,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, ErrorKind, OutputCallbackInfo, StreamConfig, StreamInstant};
-use pm_core::session::{OnFinish, SessionPlan};
+use pm_core::session::{OnFinish, SessionPlan, SessionProgress};
 use pm_core::{Bpm, MusicalPosition, Pattern};
 use rtrb::{Consumer, Producer, RingBuffer};
 
@@ -333,6 +333,17 @@ impl Transport {
         init
     }
 
+    /// The latest progress in `session` (the current engine's
+    /// `EngineHandle::session`), or `None` while that engine has not taken
+    /// every `Play` recorded: until then the cell can still hold the
+    /// previous run's progress, `finished` included.
+    pub fn session_progress(&self, session: &SessionReader) -> Option<SessionProgress> {
+        let (plays, latest) = session.latest_at();
+        latest
+            .filter(|_| plays == self.plays - self.plays_before)
+            .map(|(_, progress)| progress)
+    }
+
     /// The engine built from [`resume_init_with`](Self::resume_init_with)
     /// replaces the old one: commands recorded from now on go to it.
     pub fn engine_replaced(&mut self) {
@@ -456,6 +467,14 @@ impl AudioService {
             debug_assert!(pushed.is_ok());
         }
         Ok(())
+    }
+
+    /// The current engine's session progress, as
+    /// [`Transport::session_progress`] gives it: `None` while a `Play` sent
+    /// has not been taken yet, so a finished progress is always the current
+    /// run's. Use this rather than `handle().session.latest()`.
+    pub fn session_progress(&self) -> Option<SessionProgress> {
+        self.transport.session_progress(&self.handle.session)
     }
 
     /// The engine's events, garbage, position and counters. Replaced by a

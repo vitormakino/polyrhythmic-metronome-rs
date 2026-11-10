@@ -389,17 +389,17 @@ impl Engine {
 
     fn play(&mut self, at: u64) {
         self.plays += 1;
-        self.session_out.publish_plays(self.plays);
         if !self.playing {
             self.timeline.restart(&self.current.update.pattern, at);
             self.playing = true;
-            match self.plan.as_deref() {
-                Some(plan) => {
-                    self.active = Some(Active::start(plan, self.bpm, self.sample_rate, at));
-                }
-                None => self.session_out.publish(None),
+            // A new run: the previous run's progress goes before the Play
+            // count does, so no reader pairs it with this Play.
+            self.session_out.publish(None);
+            if let Some(plan) = self.plan.as_deref() {
+                self.active = Some(Active::start(plan, self.bpm, self.sample_rate, at));
             }
         }
+        self.session_out.publish_plays(self.plays);
     }
 
     fn stop(&mut self, at: u64) {
