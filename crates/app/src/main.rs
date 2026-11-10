@@ -18,6 +18,7 @@ mod config_watch;
 mod controller;
 mod hotkeys;
 mod remote;
+mod sessions;
 mod settings;
 mod tray;
 mod windows;
@@ -395,7 +396,7 @@ fn load_config() -> (config_watch::Loader, Option<PathBuf>) {
     if let Err(e) = config::ensure_files(&dir) {
         eprintln!("polyrhythmic-metronome: {}: {e}", dir.display());
     }
-    let reload = loader.reload(&|p| std::fs::read_to_string(p), &dir);
+    let reload = loader.reload(&config_watch::read_file, &config_watch::list_toml, &dir);
     for line in &reload.diagnostics {
         eprintln!("polyrhythmic-metronome: {line}");
     }
@@ -437,6 +438,7 @@ fn main() -> eframe::Result {
             let appearance = config_watch::Appearance {
                 messages: loader.messages.clone(),
                 theme: loader.theme.clone(),
+                sessions: loader.sessions.clone(),
             };
             if let Some(dir) = config_dir {
                 config_watch::spawn(dir, loader, config_tx, cc.egui_ctx.clone());

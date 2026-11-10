@@ -1,11 +1,12 @@
-//! Loads the language and theme from `config.toml`, `locales/` and `themes/`
-//! and reloads them when those files change. Reading and parsing happen here, on the `config-watch`
+//! Loads the language, theme and practice sessions from `config.toml`,
+//! `locales/`, `themes/` and `sessions/` and reloads them when those files change. Reading and parsing happen here, on the `config-watch`
 //! thread (and once at startup, before the window opens), never in a frame or
 //! on the audio thread.
 //!
 //! A broken file never takes the app down: the last valid state is kept and
 //! the problem goes to stderr.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -17,10 +18,12 @@ use eframe::egui;
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 use pm_ui::i18n::{Messages, resolve};
-use pm_ui::palette::{self, Palette, RESERVED_THEMES};
+use pm_ui::palette::{self, Palette, RESERVED_THEMES, valid_theme_name};
+use pm_ui::state::SessionEntry;
 use pm_ui::theme::{DARK, Theme};
 
 use crate::config::{self, Config};
+use crate::sessions;
 
 /// Quiet period after the last file event before reloading (an editor save
 /// is often several events).
@@ -35,8 +38,13 @@ pub struct Loader {
     shown_theme: String,
     /// Diagnostics of the previous reload, to report only what changes.
     reported: Vec<String>,
+    /// Last valid version of each session file, by file stem.
+    session_files: BTreeMap<String, SessionEntry>,
     pub messages: Arc<Messages>,
     pub theme: Arc<Theme>,
+    /// The session list, sorted by name. Replaced, never edited: a plan a
+    /// running session holds stays as it was.
+    pub sessions: Arc<[SessionEntry]>,
 }
 
 impl Default for Loader {
@@ -46,23 +54,28 @@ impl Default for Loader {
             shown: config.language.clone(),
             shown_theme: config.theme.clone(),
             reported: Vec::new(),
+            session_files: BTreeMap::new(),
             config,
             messages: Arc::new(Messages::english()),
             theme: Arc::new(DARK),
+            sessions: Arc::from(Vec::new()),
         }
     }
 }
 
-/// The texts and colors the interface is showing.
+/// The texts, colors and session list the interface is showing.
 #[derive(Clone)]
 pub struct Appearance {
     pub messages: Arc<Messages>,
     pub theme: Arc<Theme>,
+    /// The session list; the interface starts using it with the session strip.
+    #[allow(dead_code)]
+    pub sessions: Arc<[SessionEntry]>,
 }
 
 /// What a reload produced.
 pub struct Reload {
-    /// The current messages and theme; `Some` only when either changed.
+    /// The current messages, theme and sessions; `Some` only when any changed.
     pub appearance: Option<Appearance>,
     /// One line per problem, each naming the file. Empty when the problems
     /// are the same as in the previous reload.
@@ -70,9 +83,15 @@ pub struct Reload {
 }
 
 impl Loader {
-    /// Re-reads `config.toml`, the language file and the theme file in `dir`
-    /// through `read`.
-    pub fn reload(&mut self, read: &dyn Fn(&Path) -> io::Result<String>, dir: &Path) -> Reload {
+    /// Re-reads `config.toml`, the language file, the theme file and the
+    /// session files in `dir` through `read`; `list` gives the `*.toml` files
+    /// of a folder.
+    pub fn reload(
+        &mut self,
+        read: &dyn Fn(&Path) -> io::Result<String>,
+        list: &dyn Fn(&Path) -> io::Result<Vec<PathBuf>>,
+        dir: &Path,
+    ) -> Reload {
         let mut diagnostics = Vec::new();
         let config_path = dir.join("config.toml");
         match read(&config_path) {
@@ -93,6 +112,7 @@ impl Loader {
 
         let messages_changed = self.reload_messages(read, dir, &mut diagnostics);
         let theme_changed = self.reload_theme(read, dir, &mut diagnostics);
+        let sessions_changed = self.reload_sessions(read, list, dir, &mut diagnostics);
 
         if diagnostics == self.reported {
             diagnostics.clear();
@@ -100,12 +120,104 @@ impl Loader {
             self.reported = diagnostics.clone();
         }
         Reload {
-            appearance: (messages_changed || theme_changed).then(|| Appearance {
-                messages: self.messages.clone(),
-                theme: self.theme.clone(),
+            appearance: (messages_changed || theme_changed || sessions_changed).then(|| {
+                Appearance {
+                    messages: self.messages.clone(),
+                    theme: self.theme.clone(),
+                    sessions: self.sessions.clone(),
+                }
             }),
             diagnostics,
         }
+    }
+
+    /// Re-reads every `sessions/*.toml`; true when the list changed. A file
+    /// that parses replaces its earlier version; one that does not keeps the
+    /// last valid version (none: it is not listed); a file that is gone is
+    /// unlisted.
+    fn reload_sessions(
+        &mut self,
+        read: &dyn Fn(&Path) -> io::Result<String>,
+        list: &dyn Fn(&Path) -> io::Result<Vec<PathBuf>>,
+        dir: &Path,
+        diagnostics: &mut Vec<String>,
+    ) -> bool {
+        let folder = dir.join("sessions");
+        let paths = match list(&folder) {
+            Ok(paths) => paths,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => {
+                // Cannot tell what is there: keep the list as it is.
+                diagnostics.push(format!("{}: {e}", folder.display()));
+                return false;
+            }
+        };
+        let mut present = BTreeSet::new();
+        for path in paths {
+            if path.extension().is_none_or(|e| e != "toml") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                diagnostics.push(format!(
+                    "{}: file name is not valid UTF-8, ignored",
+                    path.display()
+                ));
+                continue;
+            };
+            if !valid_theme_name(stem) {
+                diagnostics.push(format!(
+                    "{}: invalid session file name (letters, digits, _ and -, up to 64), ignored",
+                    path.display()
+                ));
+                continue;
+            }
+            let stem = stem.to_owned();
+            let text = match read(&path) {
+                Ok(text) => text,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    diagnostics.push(format!("{}: {e}", path.display()));
+                    present.insert(stem);
+                    continue;
+                }
+            };
+            present.insert(stem.clone());
+            match sessions::parse(&text, &stem) {
+                Ok((plan, warnings)) => {
+                    diagnostics.extend(
+                        warnings
+                            .into_iter()
+                            .map(|w| format!("{}: {w}", path.display())),
+                    );
+                    match self.session_files.get_mut(&stem) {
+                        // Same plan: keep the `Arc` the list already shares.
+                        Some(old) if *old.plan == plan => {}
+                        _ => {
+                            let entry = SessionEntry {
+                                name: plan.name.clone(),
+                                plan: Arc::new(plan),
+                            };
+                            self.session_files.insert(stem, entry);
+                        }
+                    }
+                }
+                Err(e) => diagnostics.push(format!("{}: {e}", path.display())),
+            }
+        }
+        self.session_files.retain(|stem, _| present.contains(stem));
+
+        let mut entries: Vec<(&String, &SessionEntry)> = self.session_files.iter().collect();
+        entries.sort_by_cached_key(|(stem, e)| (e.name.to_lowercase(), (*stem).clone()));
+        let same = entries.len() == self.sessions.len()
+            && entries
+                .iter()
+                .zip(self.sessions.iter())
+                .all(|((_, a), b)| Arc::ptr_eq(&a.plan, &b.plan) && a.name == b.name);
+        if same {
+            return false;
+        }
+        self.sessions = entries.into_iter().map(|(_, e)| e.clone()).collect();
+        true
     }
 
     /// Rebuilds the messages for the configured language; true when they
@@ -242,13 +354,25 @@ impl Loader {
     }
 }
 
-fn read_file(path: &Path) -> io::Result<String> {
+pub fn read_file(path: &Path) -> io::Result<String> {
     fs::read_to_string(path)
+}
+
+/// The `*.toml` files directly in `folder`.
+pub fn list_toml(folder: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(folder)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|e| e == "toml") && path.is_file() {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
 }
 
 /// Watches `dir` (the folder, recursively: editors save by replacing the
 /// file) on a `config-watch` thread. Each change that alters the text sends
-/// the new messages and theme on `tx` and wakes the app. Problems go to stderr; if the
+/// the new messages, theme and sessions on `tx` and wakes the app. Problems go to stderr; if the
 /// watcher cannot start the app simply runs without live reload.
 pub fn spawn(dir: PathBuf, mut loader: Loader, tx: Sender<Appearance>, ctx: egui::Context) {
     let spawned = std::thread::Builder::new()
@@ -291,7 +415,7 @@ pub fn spawn(dir: PathBuf, mut loader: Loader, tx: Sender<Appearance>, ctx: egui
                         Err(_) => return,
                     }
                 }
-                let reload = loader.reload(&read_file, &dir);
+                let reload = loader.reload(&read_file, &list_toml, &dir);
                 for line in &reload.diagnostics {
                     eprintln!("polyrhythmic-metronome: {line}");
                 }
@@ -327,10 +451,14 @@ mod tests {
         }
     }
 
+    fn no_list(_: &Path) -> io::Result<Vec<PathBuf>> {
+        Err(io::Error::from(io::ErrorKind::NotFound))
+    }
+
     #[test]
     fn missing_config_is_english() {
         let mut l = Loader::default();
-        let r = l.reload(&files(&[]), Path::new("/c"));
+        let r = l.reload(&files(&[]), &no_list, Path::new("/c"));
         assert_eq!(*l.messages, Messages::english());
         assert!(r.appearance.is_none(), "nothing changed");
     }
@@ -340,10 +468,11 @@ mod tests {
         let mut l = Loader::default();
         let r = l.reload(
             &files(&[("/c/config.toml", "language = \"pt-BR\"")]),
+            &no_list,
             Path::new("/c"),
         );
         assert_eq!(r.appearance.unwrap().messages.add_pulse, "Adicionar pulso");
-        let r = l.reload(&files(&[]), Path::new("/c"));
+        let r = l.reload(&files(&[]), &no_list, Path::new("/c"));
         assert_eq!(
             r.appearance.unwrap().messages.add_pulse,
             "Add pulse",
@@ -356,10 +485,12 @@ mod tests {
         let mut l = Loader::default();
         l.reload(
             &files(&[("/c/config.toml", "language = \"pt-BR\"")]),
+            &no_list,
             Path::new("/c"),
         );
         let r = l.reload(
             &files(&[("/c/config.toml", "language = \"pt-BR")]),
+            &no_list,
             Path::new("/c"),
         );
         assert!(r.appearance.is_none());
@@ -373,10 +504,12 @@ mod tests {
         let cfg = ("/c/config.toml", "language = \"de\"");
         l.reload(
             &files(&[cfg, ("/c/locales/de.toml", "add_pulse = \"Puls\"")]),
+            &no_list,
             Path::new("/c"),
         );
         let r = l.reload(
             &files(&[cfg, ("/c/locales/de.toml", "add_pulse = ")]),
+            &no_list,
             Path::new("/c"),
         );
         assert!(r.appearance.is_none());
@@ -388,9 +521,9 @@ mod tests {
     fn same_diagnostics_are_not_reported_twice() {
         let mut l = Loader::default();
         let read = files(&[("/c/config.toml", "language = \"de\"\nfoo = 1")]);
-        let first = l.reload(&read, Path::new("/c"));
+        let first = l.reload(&read, &no_list, Path::new("/c"));
         assert!(!first.diagnostics.is_empty());
-        let second = l.reload(&read, Path::new("/c"));
+        let second = l.reload(&read, &no_list, Path::new("/c"));
         assert!(second.diagnostics.is_empty(), "{:?}", second.diagnostics);
     }
 
@@ -400,6 +533,7 @@ mod tests {
         let cfg = ("/c/config.toml", "language = \"de\"");
         l.reload(
             &files(&[cfg, ("/c/locales/de.toml", "add_pulse = \"Puls\"")]),
+            &no_list,
             Path::new("/c"),
         );
         let list = [cfg];
@@ -411,7 +545,7 @@ mod tests {
                 ok(p)
             }
         };
-        let r = l.reload(&read, Path::new("/c"));
+        let r = l.reload(&read, &no_list, Path::new("/c"));
         assert!(r.appearance.is_none());
         assert_eq!(l.messages.add_pulse, "Puls");
         assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
@@ -483,6 +617,7 @@ mod tests {
         let mut l = Loader::default();
         let r = l.reload(
             &files(&[CFG_X, ("/c/themes/x.toml", "accent = \"#102030\"")]),
+            &no_list,
             Path::new("/c"),
         );
         let theme = r.appearance.expect("theme changed").theme;
@@ -496,10 +631,12 @@ mod tests {
         let mut l = Loader::default();
         l.reload(
             &files(&[CFG_X, ("/c/themes/x.toml", "accent = \"#102030\"")]),
+            &no_list,
             Path::new("/c"),
         );
         let r = l.reload(
             &files(&[CFG_X, ("/c/themes/x.toml", "accent = \"orange\"")]),
+            &no_list,
             Path::new("/c"),
         );
         assert!(r.appearance.is_none());
@@ -519,6 +656,7 @@ mod tests {
         let mut l = Loader::default();
         l.reload(
             &files(&[CFG_X, ("/c/themes/x.toml", "accent = \"#102030\"")]),
+            &no_list,
             Path::new("/c"),
         );
         let r = l.reload(
@@ -526,6 +664,7 @@ mod tests {
                 ("/c/config.toml", "theme = \"y\""),
                 ("/c/themes/y.toml", "accent = \"orange\""),
             ]),
+            &no_list,
             Path::new("/c"),
         );
         assert_eq!(*r.appearance.unwrap().theme, DARK);
@@ -535,7 +674,7 @@ mod tests {
     #[test]
     fn missing_theme_file_uses_default_and_warns() {
         let mut l = Loader::default();
-        let r = l.reload(&files(&[CFG_X]), Path::new("/c"));
+        let r = l.reload(&files(&[CFG_X]), &no_list, Path::new("/c"));
         assert!(r.appearance.is_none(), "default was already showing");
         assert_eq!(*l.theme, DARK);
         assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
@@ -550,6 +689,7 @@ mod tests {
                 ("/c/config.toml", "theme = \"light\""),
                 ("/c/themes/light.toml", "accent = \"#102030\""),
             ]),
+            &no_list,
             Path::new("/c"),
         );
         let theme = r.appearance.expect("light differs from default").theme;
@@ -559,6 +699,7 @@ mod tests {
 
         let r = l.reload(
             &files(&[("/c/config.toml", "theme = \"omarchy\"")]),
+            &no_list,
             Path::new("/c"),
         );
         assert_eq!(*r.appearance.unwrap().theme, DARK);
@@ -572,6 +713,7 @@ mod tests {
                 ("/c/config.toml", "theme = \"Light\""),
                 ("/c/themes/Light.toml", "accent = \"#102030\""),
             ]),
+            &no_list,
             Path::new("/c"),
         );
         assert_eq!(
@@ -583,6 +725,7 @@ mod tests {
         let mut l = Loader::default();
         let r = l.reload(
             &files(&[("/c/config.toml", "theme = \"Light\"")]),
+            &no_list,
             Path::new("/c"),
         );
         assert_eq!(
@@ -594,6 +737,7 @@ mod tests {
         // The built-ins never read a file: no warning without one.
         let r = l.reload(
             &files(&[("/c/config.toml", "theme = \"light\"")]),
+            &no_list,
             Path::new("/c"),
         );
         assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
@@ -608,12 +752,14 @@ mod tests {
                 ("/c/config.toml", "language = \"pt-BR\"\ntheme = \"x\""),
                 theme_x,
             ]),
+            &no_list,
             Path::new("/c"),
         );
         let first = r.appearance.unwrap();
         // Only the theme changes.
         let r = l.reload(
             &files(&[("/c/config.toml", "language = \"pt-BR\"\ntheme = \"light\"")]),
+            &no_list,
             Path::new("/c"),
         );
         let second = r.appearance.unwrap();
@@ -622,6 +768,7 @@ mod tests {
         // Only the language changes.
         let r = l.reload(
             &files(&[("/c/config.toml", "language = \"en\"\ntheme = \"light\"")]),
+            &no_list,
             Path::new("/c"),
         );
         let third = r.appearance.unwrap();
@@ -643,7 +790,7 @@ mod tests {
         fs::write(dir.0.join("config.toml"), "theme = \"x\"").unwrap();
         fs::write(dir.0.join("themes/x.toml"), "accent = \"#102030\"").unwrap();
         let mut loader = Loader::default();
-        loader.reload(&read_file, &dir.0);
+        loader.reload(&read_file, &list_toml, &dir.0);
         let (tx, rx) = mpsc::channel();
         spawn(dir.0.clone(), loader, tx, egui::Context::default());
         let wait = Duration::from_secs(2);
@@ -653,5 +800,162 @@ mod tests {
         fs::rename(&tmp, dir.0.join("themes/x.toml")).unwrap();
         let a = rx.recv_timeout(wait).expect("theme edit delivers");
         assert_eq!(a.theme.accent, egui::Color32::from_rgb(0x40, 0x50, 0x60));
+    }
+
+    const GOOD: &str = "[[stage]]\nbars = 4\n";
+    const GOOD_NAMED: &str = "name = \"alpha\"\n[[stage]]\nbars = 8\n";
+
+    fn listing(names: &[&str]) -> impl Fn(&Path) -> io::Result<Vec<PathBuf>> {
+        let paths: Vec<PathBuf> = names
+            .iter()
+            .map(|n| PathBuf::from(format!("/c/sessions/{n}")))
+            .collect();
+        move |_| Ok(paths.clone())
+    }
+
+    fn session_files(list: &[(&str, &str)]) -> impl Fn(&Path) -> io::Result<String> {
+        let owned: Vec<(String, &str)> = list
+            .iter()
+            .map(|(n, t)| (format!("/c/sessions/{n}"), *t))
+            .collect();
+        move |p| {
+            owned
+                .iter()
+                .find(|(path, _)| Path::new(path) == p)
+                .map(|(_, t)| (*t).to_owned())
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+        }
+    }
+
+    #[test]
+    fn sessions_list_sorted_and_named() {
+        let mut l = Loader::default();
+        let read = session_files(&[("zeta.toml", GOOD), ("beta.toml", GOOD_NAMED)]);
+        let r = l.reload(
+            &read,
+            &listing(&["zeta.toml", "beta.toml"]),
+            Path::new("/c"),
+        );
+        let sessions = r.appearance.expect("list changed").sessions;
+        let names: Vec<&str> = sessions.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["alpha", "zeta"], "named by `name`, else the stem");
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+        // Nothing changed: no new appearance.
+        let r = l.reload(
+            &read,
+            &listing(&["zeta.toml", "beta.toml"]),
+            Path::new("/c"),
+        );
+        assert!(r.appearance.is_none());
+    }
+
+    #[test]
+    fn sort_ignores_case() {
+        let mut l = Loader::default();
+        let read = session_files(&[
+            ("b.toml", "name = \"Bravo\"\n[[stage]]\nbars = 1\n"),
+            ("a.toml", "name = \"alpha\"\n[[stage]]\nbars = 1\n"),
+            ("c.toml", "name = \"Charlie\"\n[[stage]]\nbars = 1\n"),
+        ]);
+        let r = l.reload(
+            &read,
+            &listing(&["b.toml", "a.toml", "c.toml"]),
+            Path::new("/c"),
+        );
+        let sessions = r.appearance.unwrap().sessions;
+        let names: Vec<&str> = sessions.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["alpha", "Bravo", "Charlie"]);
+    }
+
+    #[test]
+    fn broken_file_keeps_last_valid_and_running_plan_unaffected() {
+        let mut l = Loader::default();
+        let names = listing(&["s.toml"]);
+        l.reload(&session_files(&[("s.toml", GOOD)]), &names, Path::new("/c"));
+        let running = l.sessions[0].plan.clone();
+        let before = (*running).clone();
+
+        let r = l.reload(
+            &session_files(&[("s.toml", "[[stage]]\nbars = 0\n")]),
+            &names,
+            Path::new("/c"),
+        );
+        assert!(r.appearance.is_none(), "the old version stays");
+        assert_eq!(l.sessions.len(), 1);
+        assert!(Arc::ptr_eq(&l.sessions[0].plan, &running));
+        assert_eq!(*running, before);
+        assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
+        assert!(r.diagnostics[0].contains("s.toml") && r.diagnostics[0].contains("line 2"));
+
+        // A valid edit publishes a new plan and leaves the running one alone.
+        let r = l.reload(
+            &session_files(&[("s.toml", GOOD_NAMED)]),
+            &names,
+            Path::new("/c"),
+        );
+        assert_eq!(r.appearance.unwrap().sessions[0].name, "alpha");
+        assert_eq!(*running, before, "the running plan never changes");
+        assert!(!Arc::ptr_eq(&l.sessions[0].plan, &running));
+
+        // Deleted: unlisted.
+        let r = l.reload(&session_files(&[]), &listing(&[]), Path::new("/c"));
+        assert!(r.appearance.unwrap().sessions.is_empty());
+        assert_eq!(*running, before);
+    }
+
+    #[test]
+    fn never_valid_file_is_not_listed() {
+        let mut l = Loader::default();
+        let r = l.reload(
+            &session_files(&[("bad.toml", "bars = 4\n")]),
+            &listing(&["bad.toml"]),
+            Path::new("/c"),
+        );
+        assert!(r.appearance.is_none());
+        assert!(l.sessions.is_empty());
+        assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
+        assert!(r.diagnostics[0].contains("bad.toml"));
+        // The same problem is not reported twice.
+        let r = l.reload(
+            &session_files(&[("bad.toml", "bars = 4\n")]),
+            &listing(&["bad.toml"]),
+            Path::new("/c"),
+        );
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+    }
+
+    #[test]
+    fn bad_file_names_and_other_extensions_are_ignored() {
+        let mut l = Loader::default();
+        let r = l.reload(
+            &session_files(&[
+                ("bad name.toml", GOOD),
+                ("note.txt", GOOD),
+                (".hidden.toml", GOOD),
+            ]),
+            &listing(&["bad name.toml", "note.txt", ".hidden.toml"]),
+            Path::new("/c"),
+        );
+        assert!(l.sessions.is_empty());
+        assert!(r.appearance.is_none());
+        assert_eq!(r.diagnostics.len(), 2, "{:?}", r.diagnostics);
+    }
+
+    #[test]
+    fn watcher_picks_up_a_new_session_file() {
+        let dir = TempDir::new();
+        fs::create_dir_all(dir.0.join("sessions")).unwrap();
+        let mut loader = Loader::default();
+        loader.reload(&read_file, &list_toml, &dir.0);
+        let (tx, rx) = mpsc::channel();
+        spawn(dir.0.clone(), loader, tx, egui::Context::default());
+        let wait = Duration::from_secs(2);
+
+        let tmp = dir.0.join("sessions/new.tmp");
+        fs::write(&tmp, GOOD_NAMED).unwrap();
+        fs::rename(&tmp, dir.0.join("sessions/new.toml")).unwrap();
+        let a = rx.recv_timeout(wait).expect("new session file delivers");
+        assert_eq!(a.sessions.len(), 1);
+        assert_eq!(a.sessions[0].name, "alpha");
     }
 }

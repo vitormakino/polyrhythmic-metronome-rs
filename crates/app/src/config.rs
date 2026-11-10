@@ -169,18 +169,20 @@ pub fn config_schema() -> serde_json::Value {
     schema
 }
 
-fn pretty(value: &serde_json::Value) -> String {
+pub(crate) fn pretty(value: &serde_json::Value) -> String {
     let mut s = serde_json::to_string_pretty(value).expect("json serializes");
     s.push('\n');
     s
 }
 
-/// Creates the folder, `config.toml` (only if absent), `locales/`, `themes/` and the
+/// Creates the folder, `config.toml` (only if absent), `locales/`, `themes/`,
+/// `sessions/` (left empty: session files are the user's) and the
 /// schemas (only when their content differs).
 pub fn ensure_files(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir.join("schema"))?;
     fs::create_dir_all(dir.join("locales"))?;
     fs::create_dir_all(dir.join("themes"))?;
+    fs::create_dir_all(dir.join("sessions"))?;
     match OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -201,6 +203,10 @@ pub fn ensure_files(dir: &Path) -> io::Result<()> {
     write_if_changed(
         &dir.join("schema/theme.schema.json"),
         &pretty(&pm_ui::palette::theme_schema()),
+    )?;
+    write_if_changed(
+        &dir.join("schema/session.schema.json"),
+        &pretty(&crate::sessions::session_schema()),
     )
 }
 
@@ -363,6 +369,18 @@ mod tests {
         assert!(dir.join("schema/locale.schema.json").exists());
         assert!(dir.join("schema/theme.schema.json").exists());
         assert!(dir.join("themes").is_dir());
+    }
+
+    #[test]
+    fn ensure_files_creates_sessions_dir_and_schema() {
+        let t = TempDir::new();
+        ensure_files(&t.0).unwrap();
+        assert!(t.0.join("sessions").is_dir());
+        assert_eq!(fs::read_dir(t.0.join("sessions")).unwrap().count(), 0);
+        assert_eq!(
+            fs::read_to_string(t.0.join("schema/session.schema.json")).unwrap(),
+            pretty(&crate::sessions::session_schema())
+        );
     }
 
     #[test]

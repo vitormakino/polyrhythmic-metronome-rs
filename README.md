@@ -128,6 +128,52 @@ reserved, in any letter case: a file with one of those names is ignored (with a
 warning when that name is the selected theme), and `theme = "omarchy"` uses
 `default` (the Omarchy integration comes with the Linux version).
 
+### Practice sessions
+
+A session is a plan of stages for practice: a stage can jump or ramp the tempo,
+mute bars on a cycle or at random, and turn single pulses off. Each session is
+a file in `sessions/` (for example `sessions/warmup.toml`); the app creates the
+folder but never writes a session file. Start the file with
+`#:schema ../schema/session.schema.json`. The file name (letters, digits, `_`
+and `-`) is the default name of the session.
+
+```toml
+#:schema ../schema/session.schema.json
+name = "Warm-up 3:4"
+on_finish = "stop"           # "stop" (default) | "continue" | "repeat"
+show_muted_visuals = false   # default: the screen holds still in muted stretches
+
+[[stage]]
+bars = 8                     # length: bars = N or seconds = N
+
+[[stage]]
+bars = 32
+tempo = { change = 2, every_bars = 4, max = 140 }   # +2 BPM every 4 bars, up to 140
+
+[[stage]]
+bars = 16
+mute = { play_bars = 4, mute_bars = 4 }             # 4 bars play, 4 are muted
+
+[[stage]]
+seconds = 60
+pulses = [ { pulse = 2, state = "off" } ]           # pulse 2 off (counting from 1)
+
+[[stage]]
+bars = 16
+random_mute = { percent = 20, increase = 5, every_bars = 4, max = 60 }
+```
+
+Other `tempo` keys: `jump = 10` (relative) or `set = 120` (absolute), `min`
+for a falling ramp, `every_seconds`, and `smooth = true`. A mute cycle can use
+`play_seconds` and `mute_seconds` instead. A pulse state is `"off"`, `"muted"`
+or `"on"`. The schema documents every key; an unknown key or a value out of
+range makes the whole file invalid.
+
+Saving a session file updates the list at once. A broken file keeps its last
+valid version (or is not listed if it never was valid) and its file, line and
+problem go to stderr; an edit takes effect the next time the session starts,
+never in one that is running.
+
 The app writes JSON Schemas to `schema/` (only when their content changes) and
 the files point to them with `#:schema` directives. Autocomplete and
 validation need an editor with the Taplo TOML language server (Even Better

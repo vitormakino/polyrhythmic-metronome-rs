@@ -17,6 +17,15 @@ use crate::i18n::Messages;
 use crate::spring::Spring;
 use crate::theme::{DARK, Theme};
 
+/// A practice session the user can start: the name shown in the list and the
+/// plan it runs. The plan is shared and never mutated, so a session that is
+/// running is not affected when its file is edited.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionEntry {
+    pub name: String,
+    pub plan: Arc<pm_core::session::SessionPlan>,
+}
+
 /// Most beats queued for [`UiState::advance`]; older ones are dropped
 /// (e.g. while the window is hidden and nothing advances).
 pub const PENDING_BEATS_CAP: usize = 256;
