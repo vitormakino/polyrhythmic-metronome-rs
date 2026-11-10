@@ -314,7 +314,9 @@ fn rebuild_after_a_session_stopped_itself_stays_stopped() {
     let rebuilt = t.resume_init_with(snap, &ha.session);
     assert_eq!(rebuilt.resume, None, "the UI's Play is not replayed");
     let (plan, progress) = rebuilt.session.unwrap();
-    assert_eq!((plan.stages.len(), progress), (1, None));
+    // The finished run goes along, for the UI to see (not to resume).
+    let done = ha.session.latest();
+    assert_eq!((plan.stages.len(), progress), (1, done));
 }
 
 #[test]
@@ -372,6 +374,49 @@ fn rebuild_keeps_a_play_sent_after_a_session_stopped_itself() {
     let snap = hb.position.snapshot();
     assert!(!snap.playing && hb.session.latest().unwrap().finished);
     assert_eq!(t.resume_init_with(snap, &hb.session).resume, None);
+}
+
+#[test]
+fn a_rebuild_before_the_ui_saw_a_self_stop_keeps_the_finished_run() {
+    let p = Pattern::default();
+    let first = init(&p, 120);
+    let mut t = Transport::new(&first);
+    let (mut a, mut ha) = Engine::new(SR, 1, first);
+    let mut short = two_stage_plan();
+    short.stages.truncate(1);
+    send(&mut t, &mut ha, Command::Session(Some(Box::new(short))));
+    send(&mut t, &mut ha, Command::Play);
+    render(&mut a, &mut ha, 400);
+    let done = t.session_progress(&ha.session).expect("the finished run");
+    assert!(done.finished && !ha.position.snapshot().playing);
+
+    // The device changes before the UI saw `finished` (no Stop sent).
+    let rebuilt = t.resume_init_with(ha.position.snapshot(), &ha.session);
+    assert_eq!(rebuilt.resume, None, "stays stopped");
+    t.engine_replaced();
+    let (mut b, mut hb) = Engine::new(SR, 1, rebuilt);
+    render(&mut b, &mut hb, 10);
+    assert_eq!(
+        t.session_progress(&hb.session),
+        Some(done),
+        "the UI still sees the finished run"
+    );
+
+    // A second rebuild still does not restart the session by itself.
+    let rebuilt = t.resume_init_with(hb.position.snapshot(), &hb.session);
+    assert_eq!(rebuilt.resume, None);
+    t.engine_replaced();
+    let (mut c, mut hc) = Engine::new(SR, 1, rebuilt);
+    assert!(render(&mut c, &mut hc, 10).is_empty(), "silent");
+    assert!(!hc.position.snapshot().playing);
+    assert_eq!(t.session_progress(&hc.session), Some(done));
+
+    // The UI handles it: Stop, then a new Play runs the plan afresh.
+    send(&mut t, &mut hc, Command::Stop);
+    send(&mut t, &mut hc, Command::Play);
+    render(&mut c, &mut hc, 1);
+    let fresh = t.session_progress(&hc.session).expect("the new run");
+    assert_eq!((fresh.stage, fresh.finished), (1, false));
 }
 
 #[test]

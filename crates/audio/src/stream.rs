@@ -316,10 +316,14 @@ impl Transport {
                 .as_ref()
                 .is_some_and(|p| p.on_finish == OnFinish::Stop);
         if finished_stop {
-            // The engine stopped by itself and took the queued plan.
+            // The engine stopped by itself and took the queued plan. The
+            // UI may not have seen the finish yet (no `Stop` recorded): the
+            // new engine publishes it again, or the next rebuild would take
+            // the run for a `Play` not taken and start it over.
             let plan = self.queued.clone().unwrap_or_else(|| self.plan.clone());
+            let done = latest.map(|(_, progress)| progress);
             init.resume = None;
-            init.session = plan.map(|plan| (Box::new(plan), None));
+            init.session = plan.map(|plan| (Box::new(plan), done));
             return init;
         }
         if let (Some(_), true, Some((frame, mut progress)), Some((_, slot))) =

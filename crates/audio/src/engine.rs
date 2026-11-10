@@ -62,6 +62,9 @@ pub struct EngineInit {
     /// frame (the old engine's, see [`Transport::resume_init_with`]), and
     /// `bpm` its tempo. With `resume` at [`MusicalPosition::start_of`] and no
     /// progress, the session starts at the first frame, as `Play` would.
+    /// Without `resume`, a `finished` progress is the run the old engine
+    /// stopped by itself: it is published as is, so the UI still sees the
+    /// finish, until the next `Play`.
     ///
     /// [`Transport::resume_init_with`]: crate::Transport::resume_init_with
     pub session: Option<(Box<SessionPlan>, Option<SessionProgress>)>,
@@ -244,6 +247,7 @@ impl Engine {
             Some(pos) => Timeline::resume(sample_rate, init.bpm, &init.pattern, pos, 0),
             None => Timeline::new(sample_rate, init.bpm, &init.pattern, 0),
         };
+        let mut finished = None;
         let (plan, active) = match init.session {
             None => (None, None),
             Some((plan, progress)) => {
@@ -251,6 +255,10 @@ impl Engine {
                     (Some(_), Some(progress)) => Some(Active::resume(&progress, sample_rate)),
                     (Some(pos), None) if pos.ticks_per_measure == 0 => {
                         Some(Active::start(&plan, init.bpm, sample_rate, 0))
+                    }
+                    (None, Some(progress)) => {
+                        finished = Some(progress).filter(|p| p.finished);
+                        None
                     }
                     _ => None,
                 };
@@ -291,6 +299,10 @@ impl Engine {
         };
         engine.publish();
         engine.publish_session();
+        if let Some(progress) = &finished {
+            // Stays published until the next `Play`, as the old engine's did.
+            engine.session_out.publish(Some((0, progress)));
+        }
         let handle = EngineHandle {
             commands: command_tx,
             events: event_rx,
