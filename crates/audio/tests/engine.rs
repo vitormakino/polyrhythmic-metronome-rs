@@ -931,3 +931,26 @@ fn user_pulse_silences_a_forced_on_pulse_until_the_stage_ends() {
         "silent for the rest of stage 1, forced on again by stage 2"
     );
 }
+
+#[test]
+fn finish_stop_never_allocates() {
+    let p = Pattern::default();
+    let (mut e, mut h) =
+        session_engine(&p, 120, splan(vec![sstage(Span::Bars(2))], OnFinish::Stop));
+    let mut out = [0.0f32; BUF];
+    let mut sound_after_finish = false;
+    let finish = 2 * BAR;
+    assert_no_alloc::assert_no_alloc(|| {
+        for i in 0..(3 * BAR as usize).div_ceil(BUF) {
+            e.render(&mut out, Duration::ZERO);
+            while h.events.pop().is_ok() {}
+            if (i * BUF) as u64 >= finish {
+                sound_after_finish |= out.iter().any(|&x| x != 0.0);
+            }
+            let _ = h.session.latest();
+        }
+    });
+    assert!(sound_after_finish, "the chime rang");
+    assert!(!h.position.snapshot().playing, "halted");
+    assert!(h.session.latest().unwrap().finished);
+}
