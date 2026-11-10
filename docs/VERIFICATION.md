@@ -366,7 +366,22 @@ Record the result here: date, macOS version, outputs used, what differed.
 
 ### Editor autocomplete, live language switch, broken files
 
-Status: PENDING (owner). The agent cannot drive an editor or click in the app.
+Status: PASS for steps 1 (config.toml), 2 (switching) and 4; step 3 partly
+(2026-11-10, owner's Mac):
+
+- Step 1: in Zed, `config.toml` autocompletes. `locales/de.toml` not tried.
+- Step 2: owner switched `en` ⇄ `pt-BR` while playing. The window and the
+  menu bar item changed language and the sound did not stop or glitch.
+  Deleting `config.toml` not tried by hand (covered by a unit test).
+- Step 3: the agent saved `language = "pt-BR` (unterminated string) and
+  `language = 3`. The app kept the last valid language and printed the file,
+  the line and the problem each time. `"../x"` and a broken `locales/de.toml`
+  not tried by hand (covered by unit tests).
+- Step 4: the agent saved by writing a temp file and renaming it over
+  `config.toml`; every save was picked up.
+- Note: while the window is fully covered by other windows, macOS reports it
+  as occluded and the app does not redraw, so the new language shows up when
+  the window becomes visible again. The reload itself happens at once.
 
 With the app running (`cargo run --release -p polyrhythmic-metronome-app`) and
 `~/.config/polyrhythmic-metronome/` created on the first run:
