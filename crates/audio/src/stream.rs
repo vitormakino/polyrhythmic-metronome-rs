@@ -14,11 +14,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, ErrorKind, OutputCallbackInfo, StreamConfig, StreamInstant};
+use pm_core::session::{OnFinish, SessionPlan, SessionProgress};
 use pm_core::{Bpm, MusicalPosition, Pattern};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine::{Engine, EngineHandle, EngineInit};
 use crate::messages::{Command, PositionSnapshot};
+use crate::session::SessionReader;
 use crate::watch::{self, Observation, RebuildCounts, RebuildReason, WatchState};
 
 // The engine is built on the UI thread and moved into the audio callback.
@@ -189,32 +191,77 @@ impl ErrorSlot {
     }
 }
 
-/// What the UI asked the engine to play: the latest BPM, pattern and
-/// play/stop sent. A rebuilt engine starts from it.
+/// What the UI asked the engine to play: the latest BPM, pattern, session
+/// plan and play/stop sent. A rebuilt engine starts from it.
 #[derive(Clone, Debug)]
 pub struct Transport {
     pattern: Pattern,
     bpm: Bpm,
     playing: bool,
+    /// The plan the next `Play` runs; while `running`, the one running.
+    plan: Option<SessionPlan>,
+    /// A session runs since the last `Play`.
+    running: bool,
+    /// A plan sent while `running`, as the engine holds it until `Stop`.
+    queued: Option<Option<SessionPlan>>,
+    /// `Play` commands recorded, and how many of them went to engines
+    /// before the current one.
+    plays: u64,
+    plays_before: u64,
 }
 
 impl Transport {
     /// The state an engine built from `init` starts in.
     pub fn new(init: &EngineInit) -> Transport {
+        let running = init.session.as_ref().is_some_and(|(_, progress)| {
+            init.resume
+                .is_some_and(|pos| progress.is_some() || pos.ticks_per_measure == 0)
+        });
         Transport {
             pattern: init.pattern.clone(),
             bpm: init.bpm,
             playing: init.resume.is_some(),
+            plan: init.session.as_ref().map(|(plan, _)| (**plan).clone()),
+            running,
+            queued: None,
+            plays: 0,
+            plays_before: 0,
         }
     }
 
-    /// Notes `command`, sent to the engine.
+    /// Notes `command`, sent to the engine. A session plan is cloned here,
+    /// on the UI thread.
     pub fn record(&mut self, command: &Command) {
         match command {
-            Command::Play => self.playing = true,
-            Command::Stop => self.playing = false,
+            Command::Play => {
+                self.plays += 1;
+                if !self.playing {
+                    self.playing = true;
+                    self.running = self.plan.is_some();
+                }
+            }
+            Command::Stop => {
+                if self.playing {
+                    self.playing = false;
+                    if std::mem::take(&mut self.running)
+                        && let Some(plan) = self.queued.take()
+                    {
+                        self.plan = plan;
+                    }
+                }
+            }
             Command::SetBpm(bpm) => self.bpm = *bpm,
             Command::SetPattern(update) => self.pattern = update.pattern.clone(),
+            // The runner keeps it: a rebuild resumes it with the progress.
+            Command::UserPulse(_) => {}
+            Command::Session(plan) => {
+                let plan = plan.as_deref().cloned();
+                if self.running {
+                    self.queued = Some(plan);
+                } else {
+                    self.plan = plan;
+                }
+            }
         }
     }
 
@@ -236,7 +283,84 @@ impl Transport {
             pattern: self.pattern.clone(),
             bpm: self.bpm,
             resume,
+            session: self.plan.clone().map(|plan| (Box::new(plan), None)),
         }
+    }
+
+    /// [`resume_init`](Self::resume_init) that also continues the session
+    /// the old engine runs, from the latest progress in `session` (its
+    /// `EngineHandle::session`): same stage, bar and tempo, and the time
+    /// since that progress was taken still counts. A session that finished
+    /// with [`OnFinish::Stop`] stays stopped.
+    ///
+    /// While the session runs, a plan sent for the next `Play` is not in the
+    /// init: send [`queued_session`](Self::queued_session) to the new engine.
+    pub fn resume_init_with(
+        &self,
+        snapshot: PositionSnapshot,
+        session: &SessionReader,
+    ) -> EngineInit {
+        let (plays, latest) = session.latest_at();
+        let mut init = self.resume_init(snapshot);
+        if !self.running {
+            return init;
+        }
+        // A Play the engine has not taken yet starts the session at the one
+        // (below); a stale `finished` belongs to the run before it.
+        let every_play_taken = plays == self.plays - self.plays_before;
+        let finished_stop = every_play_taken
+            && !snapshot.playing
+            && latest.is_some_and(|(_, p)| p.finished)
+            && self
+                .plan
+                .as_ref()
+                .is_some_and(|p| p.on_finish == OnFinish::Stop);
+        if finished_stop {
+            // The engine stopped by itself and took the queued plan. The
+            // UI may not have seen the finish yet (no `Stop` recorded): the
+            // new engine publishes it again, or the next rebuild would take
+            // the run for a `Play` not taken and start it over.
+            let plan = self.queued.clone().unwrap_or_else(|| self.plan.clone());
+            let done = latest.map(|(_, progress)| progress);
+            init.resume = None;
+            init.session = plan.map(|plan| (Box::new(plan), done));
+            return init;
+        }
+        if let (Some(_), true, Some((frame, mut progress)), Some((_, slot))) =
+            (init.resume, snapshot.playing, latest, init.session.as_mut())
+        {
+            // Date the progress at the seam, the new engine's frame 0.
+            let since = snapshot.frame.saturating_sub(frame);
+            progress.frames_in_stage = progress.frames_in_stage.saturating_add(since);
+            progress.total_frames = progress.total_frames.saturating_add(since);
+            init.bpm = progress.moment.bpm;
+            *slot = Some(progress);
+        }
+        init
+    }
+
+    /// The latest progress in `session` (the current engine's
+    /// `EngineHandle::session`), or `None` while that engine has not taken
+    /// every `Play` recorded: until then the cell can still hold the
+    /// previous run's progress, `finished` included.
+    pub fn session_progress(&self, session: &SessionReader) -> Option<SessionProgress> {
+        let (plays, latest) = session.latest_at();
+        latest
+            .filter(|_| plays == self.plays - self.plays_before)
+            .map(|(_, progress)| progress)
+    }
+
+    /// The engine built from [`resume_init_with`](Self::resume_init_with)
+    /// replaces the old one: commands recorded from now on go to it.
+    pub fn engine_replaced(&mut self) {
+        self.plays_before = self.plays;
+    }
+
+    /// The `Session` command a rebuilt engine needs while a session runs: a
+    /// plan sent during the run, waiting for the next `Play`.
+    pub fn queued_session(&self) -> Option<Command> {
+        let plan = self.queued.as_ref().filter(|_| self.running)?;
+        Some(Command::Session(plan.clone().map(Box::new)))
     }
 }
 
@@ -351,6 +475,14 @@ impl AudioService {
         Ok(())
     }
 
+    /// The current engine's session progress, as
+    /// [`Transport::session_progress`] gives it: `None` while a `Play` sent
+    /// has not been taken yet, so a finished progress is always the current
+    /// run's. Use this rather than `handle().session.latest()`.
+    pub fn session_progress(&self) -> Option<SessionProgress> {
+        self.transport.session_progress(&self.handle.session)
+    }
+
     /// The engine's events, garbage, position and counters. Replaced by a
     /// new handle on every rebuild (counters carry over).
     pub fn handle(&mut self) -> &mut EngineHandle {
@@ -400,6 +532,7 @@ impl AudioService {
     /// how each is confirmed first); with no output it retries.
     pub fn tick(&mut self) {
         while self.handle.garbage.pop().is_ok() {}
+        while self.handle.session_garbage.pop().is_ok() {}
         let now = Instant::now();
         let wall = SystemTime::now();
         let wall_jumped = wall
@@ -460,9 +593,11 @@ impl AudioService {
         {
             snapshot.position = origin;
         }
-        let init = self.transport.resume_init(snapshot);
+        let init = self
+            .transport
+            .resume_init_with(snapshot, &self.handle.session);
         self.next_attempt = now + RETRY;
-        let (live, handle) = match open(&self.host, &init, self.tap_capacity) {
+        let (live, mut handle) = match open(&self.host, &init, self.tap_capacity) {
             Ok(Some(opened)) => opened,
             // Keep the old handle: its position stays the last one played.
             Ok(None) => return,
@@ -472,6 +607,12 @@ impl AudioService {
             }
         };
         self.last_error = None;
+        self.transport.engine_replaced();
+        if let Some(command) = self.transport.queued_session() {
+            // A fresh queue: there is room.
+            let pushed = handle.commands.push(command);
+            debug_assert!(pushed.is_ok());
+        }
         let old = std::mem::replace(&mut self.handle, handle);
         for (new, old) in [
             (&self.handle.underruns, &old.underruns),
@@ -809,6 +950,7 @@ mod tests {
             pattern: Pattern::default(),
             bpm: Bpm::new(120),
             resume: Some(MusicalPosition::start_of(0)),
+            session: None,
         };
         let (engine, mut handle) = Engine::new(48_000, 2, init);
         // Room for exactly 6 buffers of 480 frames.

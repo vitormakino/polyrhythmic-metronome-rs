@@ -1,0 +1,195 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "description": "Name shown in the session list; default is the file name without .toml.",
+      "type": "string"
+    },
+    "on_finish": {
+      "description": "What happens after the last stage: stop (default), continue at the last tempo, or repeat from the first stage.",
+      "enum": [
+        "stop",
+        "continue",
+        "repeat"
+      ]
+    },
+    "show_muted_visuals": {
+      "description": "Keep animating the pulses during muted stretches. Default false: the screen holds still.",
+      "type": "boolean"
+    },
+    "stage": {
+      "description": "The stages, played in order.",
+      "items": {
+        "additionalProperties": false,
+        "description": "One stage of the session. With no options it just keeps playing for its length.",
+        "properties": {
+          "bars": {
+            "description": "Stage length in bars; use this or seconds.",
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mute": {
+            "additionalProperties": false,
+            "description": "Play, then mute, over and over. Use the bars pair or the seconds pair, not both.",
+            "properties": {
+              "mute_bars": {
+                "description": "Bars that are muted after each play; goes with play_bars.",
+                "maximum": 1000000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "mute_seconds": {
+                "description": "Seconds that are muted after each play; goes with play_seconds.",
+                "maximum": 1000000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "play_bars": {
+                "description": "Bars that play before each mute; goes with mute_bars.",
+                "maximum": 1000000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "play_seconds": {
+                "description": "Seconds that play before each mute; goes with mute_seconds.",
+                "maximum": 1000000,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "pulses": {
+            "description": "Per-pulse overrides for this stage.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One pulse override.",
+              "properties": {
+                "pulse": {
+                  "description": "Pulse position, counting from 1; each pulse at most once per stage.",
+                  "maximum": 16,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "state": {
+                  "description": "off: silent and dark; muted: silent but shown; on: always plays.",
+                  "enum": [
+                    "off",
+                    "muted",
+                    "on"
+                  ]
+                }
+              },
+              "required": [
+                "pulse",
+                "state"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "random_mute": {
+            "additionalProperties": false,
+            "description": "Mutes a share of the bars at random.",
+            "properties": {
+              "every_bars": {
+                "description": "Bars between increases.",
+                "maximum": 10000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "increase": {
+                "description": "Percent added every every_bars bars (needs every_bars when above 0). Default 0.",
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max": {
+                "description": "Highest chance the increases reach; at least percent. Default 100.",
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "percent": {
+                "description": "Chance, in percent, that a bar is muted.",
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "percent"
+            ],
+            "type": "object"
+          },
+          "seconds": {
+            "description": "Stage length in seconds; use this or bars.",
+            "maximum": 86400,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "tempo": {
+            "additionalProperties": false,
+            "description": "Tempo change in this stage: a one-off jump or set, a ramp, or both.",
+            "properties": {
+              "change": {
+                "description": "Ramp: BPM added each time the interval passes (not 0, negative lowers it). Needs every_bars or every_seconds.",
+                "type": "integer"
+              },
+              "every_bars": {
+                "description": "Ramp interval in bars; not with every_seconds.",
+                "maximum": 10000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "every_seconds": {
+                "description": "Ramp interval in seconds; not with every_bars.",
+                "maximum": 86400,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "jump": {
+                "description": "Add this many BPM when the stage starts (negative lowers it); not with set.",
+                "type": "integer"
+              },
+              "max": {
+                "description": "Ramp ceiling in BPM; only with a positive change.",
+                "maximum": 300,
+                "minimum": 40,
+                "type": "integer"
+              },
+              "min": {
+                "description": "Ramp floor in BPM; only with a negative change.",
+                "maximum": 300,
+                "minimum": 40,
+                "type": "integer"
+              },
+              "set": {
+                "description": "Set this tempo in BPM when the stage starts; not with jump.",
+                "maximum": 300,
+                "minimum": 40,
+                "type": "integer"
+              },
+              "smooth": {
+                "description": "Move in whole-BPM steps on every pulse-1 beat instead of one step per interval; needs change. Default false.",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "stage"
+  ],
+  "title": "Polyrhythmic Metronome practice session",
+  "type": "object"
+}

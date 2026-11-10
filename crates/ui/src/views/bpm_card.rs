@@ -15,8 +15,9 @@ use crate::state::{UiAction, UiState, WindowMode};
 use crate::theme::{self, Theme};
 
 /// Draws the tempo card in `rect`. `wide` picks the roomy variant (72 pt
-/// number); otherwise it is compact (56 pt). Edits `state.bpm`/`state.mode`
-/// and pushes `Tap`, `SetBpm` and `ToggleMini` actions.
+/// number); otherwise it is compact (56 pt). Shows and edits the shown tempo
+/// ([`UiState::shown_bpm`]) and `state.mode`, and pushes `Tap`, `SetBpm` and
+/// `ToggleMini` actions.
 pub(crate) fn bpm_card(
     ui: &mut Ui,
     rect: Rect,
@@ -125,7 +126,7 @@ pub(crate) fn bpm_card(
         pos2(inner.left(), inner.bottom() - slider_h),
         inner.right_bottom(),
     );
-    let mut value = i32::from(state.bpm.get());
+    let mut value = i32::from(state.shown_bpm().get());
     let changed = ui
         .scope_builder(UiBuilder::new().max_rect(slider_rect), |ui| {
             style_slider(ui, &t, slider_rect.width());
@@ -164,7 +165,7 @@ pub(super) fn bpm_stepper(
         &painter,
         center,
         Align2::CENTER_CENTER,
-        &state.bpm.get().to_string(),
+        &state.shown_bpm().get().to_string(),
         font.clone(),
         t.strong,
         -2.0,
@@ -185,8 +186,8 @@ pub(super) fn bpm_stepper(
         if resp.hovered() {
             painter.circle_filled(c, step / 2.0, t.border);
         }
-        let at_limit = (delta < 0 && state.bpm.get() == Bpm::MIN)
-            || (delta > 0 && state.bpm.get() == Bpm::MAX);
+        let shown = state.shown_bpm().get();
+        let at_limit = (delta < 0 && shown == Bpm::MIN) || (delta > 0 && shown == Bpm::MAX);
         let color = if at_limit {
             t.dot_inactive
         } else {
@@ -198,7 +199,7 @@ pub(super) fn bpm_stepper(
             widgets::plus(&painter, c, icon, color);
         }
         if resp.clicked() {
-            set_bpm(state, i32::from(state.bpm.get()) + delta, actions);
+            set_bpm(state, i32::from(state.shown_bpm().get()) + delta, actions);
         }
     }
     Rect::from_center_size(center, vec2(digits, font.size * 1.1))
@@ -252,15 +253,15 @@ pub(super) fn bpm_gestures(
     ui.data_mut(|d| d.insert_temp(acc_id, (scroll_acc, drag_acc)));
     let steps = (scroll_steps + drag_steps) as i32;
     if steps != 0 {
-        set_bpm(state, i32::from(state.bpm.get()) + steps, actions);
+        set_bpm(state, i32::from(state.shown_bpm().get()) + steps, actions);
     }
 }
 
+/// Sets the shown tempo (see [`UiState::set_shown_bpm`]) when it changes.
 pub(super) fn set_bpm(state: &mut UiState, value: i32, actions: &mut Vec<UiAction>) {
     let bpm = Bpm::new(value);
-    if bpm != state.bpm {
-        state.bpm = bpm;
-        actions.push(UiAction::SetBpm(bpm));
+    if bpm != state.shown_bpm() {
+        state.set_shown_bpm(bpm, actions);
     }
 }
 

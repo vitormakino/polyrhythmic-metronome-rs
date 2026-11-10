@@ -128,9 +128,13 @@ pub fn topology(ui: &mut Ui, state: &UiState, size: f32) {
     let flash = state.downbeat_flash();
     theme::paint_glow(&painter, center, layout_size * 0.4, t.strong, 0.6 * flash);
 
-    for (pulse, ring) in pulses.iter().zip(&rings) {
+    for (i, (pulse, ring)) in pulses.iter().zip(&rings).enumerate() {
         let color = t.pulse_color(pulse.color);
-        let opacity = if pulse.enabled { 1.0 } else { 0.2 };
+        let opacity = if state.pulse_shown_enabled(i) {
+            1.0
+        } else {
+            0.2
+        };
         let beats = pulse.beats.max(1);
 
         let circle: Vec<Pos2> = (0..=128)

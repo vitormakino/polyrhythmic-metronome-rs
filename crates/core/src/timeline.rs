@@ -142,7 +142,8 @@ impl Cursor {
 /// pattern, sample rate) re-anchor at the edit frame.
 ///
 /// `set_bpm`, `apply_pattern`, `rebase_sample_rate`, `pending_switch`,
-/// `restart` and `events_in` never allocate, nor does `sync_pattern` up to
+/// `restart`, `events_in`, `events_in_forced` and `next_reference_beat` never
+/// allocate, nor does `sync_pattern` up to
 /// [`MAX_PULSES`] pulses, so they can run on the real-time thread.
 pub struct Timeline {
     sample_rate: u32,
@@ -374,6 +375,21 @@ impl Timeline {
         to: u64,
         out: &mut impl Extend<BeatHit>,
     ) {
+        self.events_in_forced(pattern, from, to, 0, out);
+    }
+
+    /// Like [`events_in`](Self::events_in), but a pulse whose index bit is set
+    /// in `forced_on` (bit `i` for `pattern.pulses[i]`) counts as enabled even
+    /// if it is not. Muted beats are still skipped. Pulses past index 15 can
+    /// not be forced. Never allocates by itself.
+    pub fn events_in_forced(
+        &mut self,
+        pattern: &Pattern,
+        from: u64,
+        to: u64,
+        forced_on: u16,
+        out: &mut impl Extend<BeatHit>,
+    ) {
         let mut to = to;
         if let Some(switch) = self.pending_switch() {
             if from >= switch {
@@ -416,7 +432,8 @@ impl Timeline {
                 .get(beat as usize)
                 .copied()
                 .unwrap_or(Intensity::Mute);
-            if pulse.enabled && intensity != Intensity::Mute {
+            let forced = i < 16 && forced_on >> i & 1 == 1;
+            if (pulse.enabled || forced) && intensity != Intensity::Mute {
                 out.extend(core::iter::once(BeatHit {
                     pulse: pulse.id,
                     beat,
@@ -434,6 +451,42 @@ impl Timeline {
                 prev: Some(cursor.frame),
             };
         }
+    }
+
+    /// The first beat of pulse 0 (the reference cycle) whose frame is
+    /// `>= at_frame`, as `(frame, beat)` with `beat` in `0..R`. It uses the
+    /// same closed formula as [`events_in`](Self::events_in) and ignores
+    /// whether pulse 0 is enabled or still waiting for a "one". While a
+    /// switch is pending, the old grid answers for frames before the switch
+    /// and the new one from it on (the switch frame is beat 0 of the new
+    /// grid). Never allocates.
+    pub fn next_reference_beat(&self, at_frame: u64) -> (u64, u32) {
+        let sr60 = 60 * u64::from(self.sample_rate);
+        let old_beats = (self.q / sr60).max(1);
+        if let (Some(s), Some(f)) = (self.switch, self.pending_switch()) {
+            if at_frame == f {
+                return (f, 0);
+            }
+            if at_frame > f {
+                let beats = s.reference.max(1);
+                let d = i128::from(at_frame - f);
+                let bpm = i128::from(self.bpm.get());
+                let idx = to_u64((d - 1) * bpm / i128::from(sr60) + 1);
+                let frame = f + to_u64(div_ceil(i128::from(idx) * i128::from(sr60), bpm));
+                return (frame, (idx % beats) as u32);
+            }
+            let (frame, beat) = self.reference_beat_on_grid(old_beats, at_frame);
+            return if frame < f { (frame, beat) } else { (f, 0) };
+        }
+        self.reference_beat_on_grid(old_beats, at_frame)
+    }
+
+    /// First beat of an `n`-beat reference grid on the current anchor with
+    /// frame `>= at_frame`.
+    fn reference_beat_on_grid(&self, n: u64, at_frame: u64) -> (u64, u32) {
+        let beats = n as u32;
+        let idx = self.seek_idx(beats, at_frame, self.pending_idx(beats));
+        (self.frame_of(beats, idx), (idx % n) as u32)
     }
 
     /// Musical position at `frame`, including a pending switch at or before
@@ -597,4 +650,96 @@ fn reduce(num: i128, den: i128) -> (i128, i128) {
 /// Saturating conversion; frames past `u64::MAX` are never reached.
 fn to_u64(v: i128) -> u64 {
     u64::try_from(v.max(0)).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hits(tl: &mut Timeline, pat: &Pattern, from: u64, to: u64, forced: u16) -> Vec<BeatHit> {
+        let mut out = Vec::with_capacity(256);
+        tl.events_in_forced(pat, from, to, forced, &mut out);
+        out
+    }
+
+    fn pulse0_frames(pat: &Pattern, to: u64) -> Vec<(u64, u32)> {
+        let mut tl = Timeline::new(48_000, Bpm::new(120), pat, 0);
+        let mut out = Vec::with_capacity(256);
+        tl.events_in(pat, 0, to, &mut out);
+        out.iter()
+            .filter(|h| h.pulse == pat.pulses[0].id)
+            .map(|h| (h.frame, h.beat))
+            .collect()
+    }
+
+    fn check_reference(pat: &Pattern) {
+        // 120 BPM, 48 kHz: 24_000 frames per beat; 3 bars of 4 beats.
+        let expected = pulse0_frames(pat, 24_000 * 12);
+        assert_eq!(expected.len(), 12);
+        let tl = Timeline::new(48_000, Bpm::new(120), pat, 0);
+        let mut at = 0;
+        for &(frame, beat) in &expected {
+            assert_eq!(tl.next_reference_beat(at), (frame, beat % 4));
+            assert_eq!(tl.next_reference_beat(frame), (frame, beat % 4));
+            at = frame + 1;
+        }
+    }
+
+    #[test]
+    fn next_reference_beat_matches_events() {
+        check_reference(&Pattern::default());
+    }
+
+    #[test]
+    fn next_reference_beat_with_pulse0_disabled() {
+        let enabled = Pattern::default();
+        let mut disabled = enabled.clone();
+        disabled.pulses[0].enabled = false;
+        let tl = Timeline::new(48_000, Bpm::new(120), &disabled, 0);
+        let reference = Timeline::new(48_000, Bpm::new(120), &enabled, 0);
+        for at in [0, 1, 23_999, 24_000, 24_001, 70_000] {
+            assert_eq!(
+                tl.next_reference_beat(at),
+                reference.next_reference_beat(at)
+            );
+        }
+    }
+
+    #[test]
+    fn next_reference_beat_honors_pending_switch() {
+        let old = Pattern::default();
+        let mut new = old.clone();
+        new.pulses[0].beats = 3;
+        new.pulses[0].intensities.truncate(3);
+        let mut tl = Timeline::new(48_000, Bpm::new(120), &old, 0);
+        tl.sync_pattern(&new);
+        let ApplyMode::AtNextOne(f) = tl.apply_pattern(10_000, &old, &new) else {
+            panic!("expected a pending switch");
+        };
+        assert_eq!(f, 96_000);
+        assert_eq!(tl.next_reference_beat(50_000), (72_000, 3));
+        assert_eq!(tl.next_reference_beat(72_001), (96_000, 0));
+        assert_eq!(tl.next_reference_beat(96_001), (120_000, 1));
+        assert_eq!(tl.next_reference_beat(96_000), (96_000, 0));
+    }
+
+    #[test]
+    fn forced_on_emits_disabled_pulse() {
+        let enabled = Pattern::default();
+        let mut disabled = enabled.clone();
+        disabled.pulses[1].enabled = false;
+        let to = 24_000 * 8;
+        let want: Vec<_> = {
+            let mut tl = Timeline::new(48_000, Bpm::new(120), &enabled, 0);
+            hits(&mut tl, &enabled, 0, to, 0)
+        };
+        let mut tl = Timeline::new(48_000, Bpm::new(120), &disabled, 0);
+        assert!(
+            !hits(&mut tl, &disabled, 0, to, 0)
+                .iter()
+                .any(|h| h.pulse == disabled.pulses[1].id)
+        );
+        let mut tl = Timeline::new(48_000, Bpm::new(120), &disabled, 0);
+        assert_eq!(hits(&mut tl, &disabled, 0, to, 0b10), want);
+    }
 }

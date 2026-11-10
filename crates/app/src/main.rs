@@ -18,6 +18,7 @@ mod config_watch;
 mod controller;
 mod hotkeys;
 mod remote;
+mod sessions;
 mod settings;
 mod tray;
 mod windows;
@@ -101,9 +102,13 @@ impl App {
         ui.mode = settings.mode;
         ui.messages = appearance.messages;
         ui.theme = appearance.theme;
+        // Kept only if the loaded sessions have it.
+        ui.session = settings.session.clone();
+        let mut ctl = Controller::new(ui);
+        ctl.set_sessions(appearance.sessions);
         let mut app = App {
             audio,
-            ctl: Controller::new(ui),
+            ctl,
             windows: Windows::new(settings.mode, settings.full_rect, settings.mini_rect),
             visual_offsets: settings.visual_offsets.clone(),
             device_uid: None,
@@ -160,6 +165,7 @@ impl App {
             full_rect: self.windows.full_rect,
             mini_rect: self.windows.mini_rect,
             visual_offsets: self.visual_offsets.clone(),
+            session: self.ctl.ui.session.clone(),
         }
     }
 
@@ -267,8 +273,9 @@ impl eframe::App for App {
             self.sync_device();
         }
         let handle = self.audio.handle();
-        // A parked SetPattern holds back every later command (Task 7).
+        // A parked SetPattern or Session holds back every later command (Task 7).
         while handle.garbage.pop().is_ok() {}
+        while handle.session_garbage.pop().is_ok() {}
         while let Ok(event) = handle.events.pop() {
             // Nothing advances while hidden: keep no backlog.
             if !self.windows.hidden() {
@@ -276,14 +283,21 @@ impl eframe::App for App {
             }
         }
         self.ctl.ui.underruns = handle.underruns.load(Ordering::Relaxed);
+        let engine_playing = handle.position.snapshot().playing;
+        // The current run's progress only: a fresh Play never sees the last
+        // run's `finished`.
+        let progress = self.audio.session_progress();
+        self.ctl
+            .sync_session(&mut self.audio, progress, engine_playing);
         let remotes: Vec<Remote> = self.remote_rx.try_iter().collect();
         for remote in remotes {
             self.remote(ctx, remote, now);
         }
         self.ctl.flush(&mut self.audio);
-        // Only the latest language and theme matter; no audio command is
-        // involved.
+        // Only the latest language, theme and sessions matter; no audio
+        // command is involved (a session plan goes with the next Play).
         if let Some(appearance) = self.config_rx.try_iter().last() {
+            self.ctl.set_sessions(appearance.sessions);
             self.ctl.ui.messages = appearance.messages;
             theme::apply(ctx, &appearance.theme);
             self.ctl.ui.theme = appearance.theme;
@@ -395,7 +409,7 @@ fn load_config() -> (config_watch::Loader, Option<PathBuf>) {
     if let Err(e) = config::ensure_files(&dir) {
         eprintln!("polyrhythmic-metronome: {}: {e}", dir.display());
     }
-    let reload = loader.reload(&|p| std::fs::read_to_string(p), &dir);
+    let reload = loader.reload(&config_watch::read_file, &config_watch::list_toml, &dir);
     for line in &reload.diagnostics {
         eprintln!("polyrhythmic-metronome: {line}");
     }
@@ -413,6 +427,7 @@ fn main() -> eframe::Result {
         pattern: settings.pattern.clone(),
         bpm: settings.bpm,
         resume: None,
+        session: None,
     }) {
         Ok(audio) => audio,
         Err(e) => {
@@ -436,6 +451,7 @@ fn main() -> eframe::Result {
             let appearance = config_watch::Appearance {
                 messages: loader.messages.clone(),
                 theme: loader.theme.clone(),
+                sessions: loader.sessions.clone(),
             };
             if let Some(dir) = config_dir {
                 config_watch::spawn(dir, loader, config_tx, cc.egui_ctx.clone());

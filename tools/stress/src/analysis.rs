@@ -202,6 +202,7 @@ mod tests {
             pattern: pattern.clone(),
             bpm,
             resume: Some(MusicalPosition::start_of(0)),
+            session: None,
         };
         let (mut engine, _handle) = Engine::new(sample_rate, 1, init);
         let mut out = vec![0.0; frames];

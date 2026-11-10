@@ -7,16 +7,35 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
 use std::time::Instant;
 
+use pm_core::session::SessionPlan;
 use pm_core::{Bpm, MusicalPosition, Pattern, PulseId, SampleBank};
 
 /// UI → engine. Applied at the first frame of the next rendered buffer.
 pub enum Command {
-    /// Start at measure 0 (a "one"). No-op while playing.
+    /// Start at measure 0 (a "one"), running the selected session if there
+    /// is one. No-op while playing.
     Play,
-    /// Silence at once (ringing clicks are cut).
+    /// Silence at once (ringing clicks are cut); ends a running session.
     Stop,
+    /// While a session runs, it also shifts the session's tempo (see
+    /// [`Runner::user_bpm`](pm_core::Runner::user_bpm)).
     SetBpm(Bpm),
+    /// While a session runs, a pulse whose `enabled` changes is the user's
+    /// until the stage ends (see [`Runner::user_pulse`](pm_core::Runner::user_pulse)).
     SetPattern(Box<PatternUpdate>),
+    /// The user turned the pulse at this position (0-based) on or off where
+    /// the running stage overrides it: the stage's override goes until the
+    /// stage ends and the pattern's `enabled` plays (see
+    /// [`Runner::user_pulse`](pm_core::Runner::user_pulse)). Needed when the
+    /// click leaves the pattern's `enabled` as it was, so `SetPattern` sees
+    /// no change. Ignored without a running session.
+    UserPulse(usize),
+    /// Selects the session plan the next `Play` runs (`None`: plain
+    /// metronome). While a session runs it keeps its plan; this one waits for
+    /// the next `Play`. Replaced plans come back through
+    /// [`EngineHandle::session_garbage`](crate::EngineHandle) to be dropped
+    /// there.
+    Session(Option<Box<SessionPlan>>),
 }
 
 /// A pattern with its clips, built off the audio thread. Replaced updates
@@ -48,6 +67,10 @@ pub struct BeatEvent {
     pub frame: u64,
     /// When the click reaches the DAC.
     pub at: Instant,
+    /// The session silenced this hit (a muted pulse, a silent bar or a random
+    /// draw): nothing sounds. Hits of pulses the session turned off produce
+    /// no event at all.
+    pub muted: bool,
 }
 
 /// Where the engine is: `position` is the musical position at `frame`, the

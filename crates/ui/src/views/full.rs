@@ -4,7 +4,8 @@
 //! only the pulse list scrolls; every pulse card has its own height, so
 //! opening one card's settings never resizes its neighbours. Wide windows use
 //! two columns like the web app (controls left, topology right); narrow ones
-//! stack everything in one column.
+//! stack everything in one column. With session files, the session strip sits
+//! right above the play button, taking its height from the pulse list.
 
 use std::time::Instant;
 
@@ -15,6 +16,7 @@ use pm_core::MAX_PULSES;
 use super::bpm_card::bpm_card;
 use super::footer::{self, footer};
 use super::pulse_card::{Grid, pulse_list};
+use super::session_strip::{self, session_strip};
 use super::topology::topology;
 use super::widgets;
 use crate::state::{UiAction, UiState};
@@ -33,7 +35,8 @@ pub fn full_view(ui: &mut Ui, state: &mut UiState, now: Instant) -> Vec<UiAction
     let t = state.theme.clone();
     let screen = ui.max_rect();
     ui.painter().rect_filled(screen, 0.0, t.bg);
-    let mut layout = Layout::new(screen);
+    state.keep_session_summary();
+    let mut layout = Layout::new(screen, session_strip::strip_height(state));
 
     top_bar(ui, layout.top, state, layout.wide);
     bpm_card(ui, layout.bpm, state, now, layout.wide, &mut actions);
@@ -48,8 +51,12 @@ pub fn full_view(ui: &mut Ui, state: &mut UiState, now: Instant) -> Vec<UiAction
         let shift = (layout.list.height() - grid.height).max(0.0);
         layout.list.max.y -= shift;
         layout.play = layout.play.translate(vec2(0.0, -shift));
+        layout.strip = layout.strip.map(|s| s.translate(vec2(0.0, -shift)));
     }
     pulse_list(ui, layout.list, &grid, state, &mut actions);
+    if let Some(strip) = layout.strip {
+        session_strip(ui, strip, state, &mut actions);
+    }
     play_button(ui, layout.play, state, layout.wide, &mut actions);
     footer(ui, layout.footer, state, &mut actions);
     actions
@@ -63,6 +70,8 @@ struct Layout {
     topology: Rect,
     header: Rect,
     list: Rect,
+    /// The session strip, when there are session files.
+    strip: Option<Rect>,
     play: Rect,
     footer: Rect,
 }
@@ -72,7 +81,8 @@ fn row(top: f32, height: f32, left: f32, right: f32) -> Rect {
 }
 
 impl Layout {
-    fn new(screen: Rect) -> Self {
+    /// `strip_h` is the session strip's height, 0 for none.
+    fn new(screen: Rect, strip_h: f32) -> Self {
         let wide = screen.width() >= WIDE_MIN;
         let pad = if wide { 24.0 } else { 16.0 };
         let mut content = screen.shrink(pad);
@@ -97,9 +107,10 @@ impl Layout {
             let (ll, lr) = (l, l + left_width);
             let bpm = row(body_top, 184.0, ll, lr);
             let play = row(content.bottom() - 64.0, 64.0, ll, lr);
+            let strip = (strip_h > 0.0).then(|| row(play.top() - GAP - strip_h, strip_h, ll, lr));
+            let above = strip.map_or(play.top(), |s| s.top());
             let header = row(bpm.bottom() + 20.0, 28.0, ll, lr);
-            let list =
-                Rect::from_min_max(pos2(ll, header.bottom() + 8.0), pos2(lr, play.top() - 12.0));
+            let list = Rect::from_min_max(pos2(ll, header.bottom() + 8.0), pos2(lr, above - 12.0));
             let right = Rect::from_min_max(pos2(lr + column_gap, body_top), content.max);
             let side = right.width().min(right.height());
             let topology = Rect::from_min_size(
@@ -113,6 +124,7 @@ impl Layout {
                 topology,
                 header,
                 list,
+                strip,
                 play,
                 footer,
             }
@@ -120,18 +132,19 @@ impl Layout {
             let top = row(content.top(), 24.0, l, r);
             let bpm = row(top.bottom() + GAP, 144.0, l, r);
             let play = row(content.bottom() - 56.0, 56.0, l, r);
+            let strip = (strip_h > 0.0).then(|| row(play.top() - GAP - strip_h, strip_h, l, r));
+            let above = strip.map_or(play.top(), |s| s.top());
             let header_h = 28.0;
-            // What is left between the tempo card and the play button goes
-            // half to the topology, half to the pulse list.
-            let flex = (play.top() - GAP - (bpm.bottom() + GAP) - GAP - header_h - 8.0).max(0.0);
+            // What is left between the tempo card and the play button (or
+            // the session strip) goes half to the topology, half to the pulse list.
+            let flex = (above - GAP - (bpm.bottom() + GAP) - GAP - header_h - 8.0).max(0.0);
             let side = (flex * 0.5).min(content.width()).floor();
             let topology = Rect::from_min_size(
                 pos2(content.center().x - side / 2.0, bpm.bottom() + GAP),
                 Vec2::splat(side),
             );
             let header = row(topology.bottom() + GAP, header_h, l, r);
-            let list =
-                Rect::from_min_max(pos2(l, header.bottom() + 8.0), pos2(r, play.top() - GAP));
+            let list = Rect::from_min_max(pos2(l, header.bottom() + 8.0), pos2(r, above - GAP));
             Layout {
                 wide,
                 top,
@@ -139,6 +152,7 @@ impl Layout {
                 topology,
                 header,
                 list,
+                strip,
                 play,
                 footer,
             }
@@ -325,7 +339,11 @@ pub(super) fn play_button(
     );
     if resp.clicked() {
         state.playing = !state.playing;
-        if !state.playing {
+        if state.playing {
+            // A new run: the last one's summary and progress are over.
+            state.session_summary = None;
+            state.session_progress = None;
+        } else {
             state.clear_beats();
         }
         actions.push(UiAction::TogglePlay);

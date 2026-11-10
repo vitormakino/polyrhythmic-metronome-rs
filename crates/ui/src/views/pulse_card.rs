@@ -65,7 +65,14 @@ pub(crate) fn pulse_list(
         let p = &mut state.pattern;
         match edit {
             Edit::Beats(id, beats) => p.set_beats(id, beats),
-            Edit::Enabled(id, on) => p.set_enabled(id, on),
+            Edit::Enabled(id, on) => {
+                // `on` is the opposite of what the card shows: with the
+                // stage's override taken over, the pattern plays as clicked.
+                if let Some(index) = p.pulses.iter().position(|x| x.id == id) {
+                    state.take_over_pulse(index, actions);
+                }
+                state.pattern.set_enabled(id, on);
+            }
             Edit::Remove(id) => {
                 if !p.remove(id) {
                     continue;
@@ -186,7 +193,10 @@ fn pulse_grid(
             metrics,
             can_remove: pulses.len() > 1,
             open: state.settings_open(pulse.id),
-            lit: state.playing && pulse.enabled && state.active_beat(pulse.id).is_some(),
+            enabled: state.pulse_shown_enabled(i),
+            lit: state.playing
+                && state.pulse_shown_enabled(i)
+                && state.active_beat(pulse.id).is_some(),
             flash: state.flash(pulse.id),
             drop_target: drop_target == Some(i),
         }
@@ -275,6 +285,8 @@ struct Card<'a> {
     metrics: &'a CardMetrics,
     can_remove: bool,
     open: bool,
+    /// The pulse shows as on: the pattern's `enabled` with the session's mask applied.
+    enabled: bool,
     /// The pulse has a lit beat while playing.
     lit: bool,
     flash: f32,
@@ -293,10 +305,10 @@ impl Card<'_> {
         let (pulse, rect, id) = (self.pulse, self.rect, self.id);
         let t = self.theme;
         let mut painter = ui.painter().clone();
-        if !pulse.enabled {
+        if !self.enabled {
             painter.multiply_opacity(0.5);
         }
-        let color = if pulse.enabled {
+        let color = if self.enabled {
             t.pulse_color(pulse.color)
         } else {
             t.dot_inactive
@@ -342,7 +354,7 @@ impl Card<'_> {
         theme::paint_band(&painter, inner, inner_radius, bar, t.border);
         let seg = bar.width() / pulse.intensities.len().max(1) as f32;
         for (k, intensity) in pulse.intensities.iter().enumerate() {
-            let alpha = if pulse.enabled {
+            let alpha = if self.enabled {
                 intensity.gain() * 0.7
             } else {
                 0.3
@@ -432,10 +444,10 @@ impl Card<'_> {
             power_rect,
             id.with("mute"),
             &self.label(&self.m.pulse_mute),
-            !pulse.enabled,
+            !self.enabled,
         );
         let green = t.pulses[2];
-        let (power_color, power_fill) = if pulse.enabled {
+        let (power_color, power_fill) = if self.enabled {
             let c = if power.hovered() { green } else { t.text_muted };
             (c, Some(theme::with_alpha(green, 0.2)))
         } else {
@@ -443,7 +455,7 @@ impl Card<'_> {
         };
         widgets::power(painter, power_rect.center(), 14.0, power_color, power_fill);
         if power.clicked() {
-            edits.push(Edit::Enabled(pulse.id, !pulse.enabled));
+            edits.push(Edit::Enabled(pulse.id, !self.enabled));
         }
 
         let title_y = if self.metrics.title_row {

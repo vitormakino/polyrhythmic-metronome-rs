@@ -429,3 +429,33 @@ With the app running (`cargo run --release -p polyrhythmic-metronome-app`):
    it loads.
 
 Record the result here: date, macOS version, editor, what differed.
+
+## Practice sessions
+
+### Warm-up session, autocomplete, stop, muted bars, tray and hotkey
+
+Status: PENDING (owner). The agent only ran the unit tests.
+
+With the app running (`cargo run --release -p polyrhythmic-metronome-app`) and
+the README's example saved as `sessions/warmup.toml`:
+
+1. Select "Warm-up 3:4" and press Play. Expected: it starts on the "one"; each
+   stage change, tempo step and mute starts exactly on a "one", with no gap or
+   glitch (no new underruns in the footer). The strip shows the stage and the
+   tempo; at the end the end chime plays, the app stops and the summary shows.
+2. Open `sessions/warmup.toml` in Zed (Taplo language server). Expected: the
+   keys autocomplete, and an unknown key or an out-of-range value is flagged.
+   Save an edit while the session runs: the running session does not change;
+   the next Play uses the edit.
+3. Start the session, press + twice during the ramp, then Stop mid-session.
+   Expected: the screen goes back at once to the base tempo plus 2 and the
+   pulses as they were before Play; Play again starts from that tempo.
+4. Run a stage with `mute = { play_bars = 2, mute_bars = 2 }`. Expected: in
+   the muted bars nothing sounds and the screen holds still. With
+   `show_muted_visuals = true` the pulses keep blinking in the muted bars.
+5. With a session selected and the window hidden, start and stop it from the
+   menu bar item and from the Play hotkey. Expected: the same as the Play
+   button, the session included; on Stop the tempo goes back to the base.
+   Quit and reopen: the session is still selected.
+
+Record the result here: date, macOS version, editor, what differed.

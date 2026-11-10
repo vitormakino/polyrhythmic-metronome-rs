@@ -86,6 +86,86 @@
       "description": "sound {name}",
       "type": "string"
     },
+    "session_bar": {
+      "description": "bar {n}/{total}",
+      "type": "string"
+    },
+    "session_bars": {
+      "description": "{n} bars",
+      "type": "string"
+    },
+    "session_done": {
+      "description": "Done · {time} · reached {bpm} BPM",
+      "type": "string"
+    },
+    "session_done_continue": {
+      "description": "Done · continuing",
+      "type": "string"
+    },
+    "session_missing_pulse": {
+      "description": "pulse {n} is not on screen",
+      "type": "string"
+    },
+    "session_mute_cycle": {
+      "description": "{play} play / {mute} muted",
+      "type": "string"
+    },
+    "session_muted_now": {
+      "description": "MUTED",
+      "type": "string"
+    },
+    "session_none": {
+      "description": "No session",
+      "type": "string"
+    },
+    "session_pulse_muted": {
+      "description": "pulse {n} muted",
+      "type": "string"
+    },
+    "session_pulse_off": {
+      "description": "pulse {n} off",
+      "type": "string"
+    },
+    "session_pulse_on": {
+      "description": "pulse {n} on",
+      "type": "string"
+    },
+    "session_random_mute": {
+      "description": "{percent}% muted at random",
+      "type": "string"
+    },
+    "session_seconds": {
+      "description": "{n} s",
+      "type": "string"
+    },
+    "session_select": {
+      "description": "Session",
+      "type": "string"
+    },
+    "session_stage": {
+      "description": "Stage {n}/{total}",
+      "type": "string"
+    },
+    "session_tempo_jump": {
+      "description": "{change} BPM",
+      "type": "string"
+    },
+    "session_tempo_limit": {
+      "description": "up to {bpm}",
+      "type": "string"
+    },
+    "session_tempo_ramp": {
+      "description": "{change} BPM every {every}",
+      "type": "string"
+    },
+    "session_tempo_set": {
+      "description": "{bpm} BPM",
+      "type": "string"
+    },
+    "session_time": {
+      "description": "{elapsed}/{total}",
+      "type": "string"
+    },
     "settings": {
       "description": "Settings",
       "type": "string"
