@@ -6,9 +6,10 @@ use egui::{
     Align2, Color32, CornerRadius, FontId, Id, Painter, Pos2, Rect, Role, ScrollArea, Sense,
     Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, pos2, vec2,
 };
-use pm_core::{Intensity, Pulse, PulseId, SoundType};
+use pm_core::{Intensity, MAX_PULSES, Pulse, PulseId, SoundType};
 
 use super::widgets;
+use crate::i18n::{Messages, fill};
 use crate::state::{UiAction, UiState};
 use crate::theme;
 
@@ -124,7 +125,15 @@ impl Grid {
             .pattern
             .pulses
             .iter()
-            .map(|p| CardMetrics::new(painter, p, card_w, state.settings_open(p.id)))
+            .map(|p| {
+                CardMetrics::new(
+                    painter,
+                    p,
+                    card_w,
+                    state.settings_open(p.id),
+                    &state.messages,
+                )
+            })
             .collect();
         // Rows are as tall as their tallest card; each card keeps its own height.
         let mut tops = Vec::new();
@@ -173,6 +182,7 @@ fn pulse_grid(
         .and_then(|(from, to)| Some(drag.hovered.unwrap_or(to)).filter(|&t| t != from));
     for (i, (pulse, metrics)) in pulses.iter().zip(&grid.metrics).enumerate() {
         Card {
+            m: &state.messages,
             index: i,
             id: ui.make_persistent_id(("pulse", pulse.id)),
             pulse,
@@ -204,6 +214,11 @@ const SOUND_H: f32 = 20.0;
 const SOUND_GAP: f32 = 4.0;
 const BOTTOM_BAR: f32 = 4.0;
 
+/// Heading of pulse number `n` (1-based), in capitals.
+fn pulse_title(m: &Messages, n: usize) -> String {
+    fill(&m.pulse, &[("n", &n)]).to_uppercase()
+}
+
 fn title_font() -> FontId {
     theme::font_mono_medium(9.0)
 }
@@ -221,10 +236,11 @@ struct CardMetrics {
 }
 
 impl CardMetrics {
-    fn new(painter: &Painter, pulse: &Pulse, width: f32, open: bool) -> Self {
+    fn new(painter: &Painter, pulse: &Pulse, width: f32, open: bool, m: &Messages) -> Self {
         // grip + settings on the left, power + trash on the right.
         let icons = 2.0 * (4.0 + 2.0 * ICON_BUTTON);
-        let title_w = widgets::text_width(painter, "PULSO 16", title_font(), 1.0);
+        let widest = pulse_title(m, MAX_PULSES);
+        let title_w = widgets::text_width(painter, &widest, title_font(), 1.0);
         let title_row = width - icons < title_w + 8.0;
         let base =
             ICON_ROW + if title_row { TITLE_ROW } else { 0.0 } + 2.0 * STEP_H + NUMBER_H + 8.0;
@@ -254,6 +270,7 @@ impl CardMetrics {
 }
 
 struct Card<'a> {
+    m: &'a Messages,
     index: usize,
     id: Id,
     pulse: &'a Pulse,
@@ -269,7 +286,10 @@ struct Card<'a> {
 
 impl Card<'_> {
     fn label(&self, what: &str) -> String {
-        format!("Pulso {}: {what}", self.index + 1)
+        format!(
+            "{}: {what}",
+            fill(&self.m.pulse, &[("n", &(self.index + 1))])
+        )
     }
 
     fn show(&self, ui: &Ui, edits: &mut Vec<Edit>, drag: &mut DragOutcome) {
@@ -286,7 +306,7 @@ impl Card<'_> {
 
         // The card's own node, so automation can find it and read its rect.
         let card = ui.interact(rect, id.with("card"), Sense::hover());
-        let name = format!("Pulso {}", self.index + 1);
+        let name = fill(&self.m.pulse, &[("n", &(self.index + 1))]);
         card.widget_info(|| WidgetInfo::labeled(Role::Group, true, &name));
 
         let glow = if self.lit {
@@ -350,7 +370,12 @@ impl Card<'_> {
         let right = rect.right() - 4.0 - ICON_BUTTON / 2.0;
 
         let grip_rect = slot(left);
-        let grip = widgets::handle(ui, grip_rect, id.with("move"), &self.label("mover"));
+        let grip = widgets::handle(
+            ui,
+            grip_rect,
+            id.with("move"),
+            &self.label(&self.m.pulse_move),
+        );
         let grip_color = if grip.hovered() || grip.dragged() {
             theme::TEXT_MUTED
         } else {
@@ -369,7 +394,7 @@ impl Card<'_> {
             ui,
             gear_rect,
             id.with("settings"),
-            &self.label("ajustes"),
+            &self.label(&self.m.pulse_settings),
             self.open,
         );
         let gear_color = if self.open {
@@ -387,7 +412,7 @@ impl Card<'_> {
             ui,
             trash_rect,
             id.with("remove"),
-            &self.label("remover"),
+            &self.label(&self.m.pulse_remove),
             self.can_remove,
         );
         let trash_color = if !self.can_remove {
@@ -407,7 +432,7 @@ impl Card<'_> {
             ui,
             power_rect,
             id.with("mute"),
-            &self.label("silenciar"),
+            &self.label(&self.m.pulse_mute),
             !pulse.enabled,
         );
         let green = theme::PALETTE[2];
@@ -435,7 +460,7 @@ impl Card<'_> {
             painter,
             pos2(rect.center().x, title_y),
             Align2::CENTER_CENTER,
-            &format!("PULSO {}", self.index + 1),
+            &pulse_title(self.m, self.index + 1),
             title_font(),
             theme::TEXT_MUTED,
             1.0,
@@ -458,7 +483,7 @@ impl Card<'_> {
             ui,
             up,
             id.with("more"),
-            &self.label("aumentar batidas"),
+            &self.label(&self.m.pulse_more_beats),
             true,
         );
         widgets::plus(
@@ -487,7 +512,7 @@ impl Card<'_> {
             ui,
             down,
             id.with("less"),
-            &self.label("diminuir batidas"),
+            &self.label(&self.m.pulse_fewer_beats),
             can_less,
         );
         let down_color = if can_less {
@@ -530,7 +555,7 @@ impl Card<'_> {
                     pos2(x0 + col as f32 * (BAR_W + BAR_GAP), y),
                     vec2(BAR_W, BAR_H),
                 );
-                let label = self.label(&format!("batida {}", k + 1));
+                let label = self.label(&fill(&self.m.pulse_beat, &[("n", &(k + 1))]));
                 let resp = widgets::button(ui, r, id.with(("beat", k)), &label, true);
                 let r = if resp.is_pointer_button_down_on() {
                     r.shrink(0.6)
@@ -571,7 +596,7 @@ impl Card<'_> {
             painter,
             pos2(left, y + SOUND_CAPTION / 2.0),
             Align2::LEFT_CENTER,
-            "SOM",
+            &self.m.sound_heading,
             theme::font_mono(8.0),
             theme::TEXT_MUTED,
             1.0,
@@ -579,10 +604,10 @@ impl Card<'_> {
         y += SOUND_CAPTION;
         let cell_w = (panel.width() - 2.0 * SETTINGS_PAD - SOUND_GAP) / 2.0;
         let sounds = [
-            (SoundType::Sine, "Sine"),
-            (SoundType::Wood, "Wood"),
-            (SoundType::Bell, "Bell"),
-            (SoundType::Electronic, "Electronic"),
+            (SoundType::Sine, &self.m.sound_sine),
+            (SoundType::Wood, &self.m.sound_wood),
+            (SoundType::Bell, &self.m.sound_bell),
+            (SoundType::Electronic, &self.m.sound_electronic),
         ];
         for (i, (sound, name)) in sounds.into_iter().enumerate() {
             let (row, col) = (i / 2, i % 2);
@@ -594,7 +619,7 @@ impl Card<'_> {
                 vec2(cell_w, SOUND_H),
             );
             let selected = pulse.sound == sound;
-            let label = self.label(&format!("som {name}"));
+            let label = self.label(&fill(&self.m.pulse_sound, &[("name", name)]));
             let resp = widgets::toggle(ui, r, id.with(("sound", i)), &label, selected);
             let (bg, edge, text) = if selected {
                 (theme::DOT_INACTIVE, theme::TEXT_FAINT, Color32::WHITE)

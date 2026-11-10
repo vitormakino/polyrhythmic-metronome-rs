@@ -6,12 +6,14 @@
 //! [`UiAction`]s for the app to forward.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pm_audio::BeatEvent;
 use pm_core::{Bpm, Pattern, PulseId, TapTempo};
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::Messages;
 use crate::spring::Spring;
 
 /// Most beats queued for [`UiState::advance`]; older ones are dropped
@@ -61,8 +63,8 @@ pub struct UiState {
     pub visual_offset: Duration,
     pub underruns: u64,
     pub device_name: Option<String>,
-    /// Why the output could not be opened, shown on hover over "sem saída
-    /// de áudio".
+    /// Why the output could not be opened, shown on hover over the
+    /// "no audio output" status.
     pub audio_error: Option<String>,
     tap: TapTempo,
     tap_epoch: Instant,
@@ -73,6 +75,9 @@ pub struct UiState {
     settings_open: HashSet<PulseId>,
     /// While a pulse card is dragged by its handle: (from, current target) indices.
     pub(crate) dragging: Option<(usize, usize)>,
+    /// Every text the views show. Assigning a new value switches the language;
+    /// no action is involved.
+    pub messages: Arc<Messages>,
 }
 
 impl Default for UiState {
@@ -93,6 +98,7 @@ impl Default for UiState {
             dots: HashMap::new(),
             settings_open: HashSet::new(),
             dragging: None,
+            messages: Arc::new(Messages::english()),
         }
     }
 }

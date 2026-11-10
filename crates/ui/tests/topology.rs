@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::Vec2;
@@ -5,6 +6,7 @@ use egui_kittest::kittest::Queryable as _;
 use egui_kittest::{Harness, SnapshotOptions, wgpu::WgpuTestRenderer};
 use pm_audio::BeatEvent;
 use pm_core::{Pattern, PulseId};
+use pm_ui::i18n::Messages;
 use pm_ui::state::UiState;
 use pm_ui::theme;
 use pm_ui::views::topology::{ring_layout, topology};
@@ -22,6 +24,12 @@ fn pattern_of(beats: &[u32]) -> Pattern {
         pattern.set_beats(pulse.id, *n);
     }
     pattern
+}
+
+/// The v1 snapshots are Brazilian Portuguese; they must not change.
+fn pt_br(mut state: UiState) -> UiState {
+    state.messages = Arc::new(Messages::builtin("pt-BR").expect("pt-BR is embedded"));
+    state
 }
 
 fn playing(beats: &[u32]) -> UiState {
@@ -228,7 +236,7 @@ fn harness(state: UiState, size: f32) -> Harness<'static, UiState> {
 #[test]
 fn topology_node_is_the_square() {
     let h = harness(UiState::default(), 300.0);
-    let rect = h.get_by_label("Topologia rítmica").rect();
+    let rect = h.get_by_label("Rhythmic topology").rect();
     assert!((rect.width() - 300.0).abs() < 0.5);
     assert!((rect.height() - 300.0).abs() < 0.5);
 }
@@ -272,6 +280,16 @@ fn snapshot(name: &str, mut state: UiState, size: f32, hits: &[(usize, u32, u64)
 fn topology_2() {
     snapshot(
         "topology_2",
+        pt_br(playing(&[4, 3])),
+        360.0,
+        &[(0, 0, 100), (1, 0, 100)],
+    );
+}
+
+#[test]
+fn topology_2_en() {
+    snapshot(
+        "topology_2_en",
         playing(&[4, 3]),
         360.0,
         &[(0, 0, 100), (1, 0, 100)],
@@ -282,7 +300,7 @@ fn topology_2() {
 fn topology_6() {
     snapshot(
         "topology_6",
-        playing(&[4, 3, 5, 7, 6, 8]),
+        pt_br(playing(&[4, 3, 5, 7, 6, 8])),
         360.0,
         &[
             (0, 1, 100),
@@ -299,7 +317,7 @@ fn topology_6() {
 fn topology_many() {
     snapshot(
         "topology_many",
-        playing(&[17, 23, 4, 5, 6, 32, 64, 12, 9, 3, 2, 1]),
+        pt_br(playing(&[17, 23, 4, 5, 6, 32, 64, 12, 9, 3, 2, 1])),
         360.0,
         &[
             (0, 5, 100),

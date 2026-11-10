@@ -1,6 +1,6 @@
 //! The mini window: a small always-on-top card with the animated topology,
 //! the tempo (buttons, scroll and drag on the number) and Play/Stop. No pulse
-//! editing; "Expandir" goes back to the full window.
+//! editing; the expand button goes back to the full window.
 
 use std::time::Instant;
 
@@ -64,7 +64,7 @@ pub fn mini_view(ui: &mut Ui, state: &mut UiState, _now: Instant) -> Vec<UiActio
         ui,
         expand,
         ui.make_persistent_id("expand"),
-        "Expandir",
+        &state.messages.expand,
         true,
     );
     if resp.hovered() {

@@ -1,6 +1,6 @@
-//! The full window's footer: audio output status ("sem saída de áudio",
-//! "Falhas de áudio: n") and the "Configurações" popover with the visual
-//! offset slider.
+//! The full window's footer: audio output status ("no audio output",
+//! "Audio dropouts: n") and the settings popover with the visual offset
+//! slider. All texts come from the active [`Messages`](crate::i18n::Messages).
 
 use std::time::Duration;
 
@@ -11,6 +11,7 @@ use egui::{
 };
 
 use super::widgets;
+use crate::i18n::fill;
 use crate::state::{UiAction, UiState};
 use crate::theme;
 
@@ -18,13 +19,12 @@ use crate::theme;
 pub(crate) const HEIGHT: f32 = 20.0;
 /// Largest visual offset the slider allows (ms).
 pub const MAX_VISUAL_OFFSET_MS: u32 = 500;
-/// Accessible name of the visual offset slider.
-pub const OFFSET_LABEL: &str = "Offset visual (ms)";
 
 const ROSE: egui::Color32 = theme::PALETTE[4];
 
 pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiAction>) {
     let painter = ui.painter().clone();
+    let m = state.messages.clone();
     let font = theme::font_mono(10.0);
     let cy = rect.center().y;
     let mut x = rect.left() + 4.0;
@@ -50,13 +50,13 @@ pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
     };
     if state.device_name.is_none() {
         let error = state.audio_error.as_deref();
-        status(ui, "no-output", "sem saída de áudio", error);
+        status(ui, "no-output", &m.no_output, error);
     }
     if state.underruns > 0 {
         status(
             ui,
             "underruns",
-            &format!("Falhas de áudio: {}", state.underruns),
+            &fill(&m.underruns, &[("n", &state.underruns)]),
             None,
         );
     }
@@ -64,7 +64,7 @@ pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
     let gear = Rect::from_center_size(pos2(rect.right() - 11.0, cy), Vec2::splat(22.0));
     let id = ui.make_persistent_id("app-settings");
     let open = Popup::is_id_open(ui.ctx(), id.with("popup"));
-    let resp = widgets::toggle(ui, gear, id, "Configurações", open);
+    let resp = widgets::toggle(ui, gear, id, &m.settings, open);
     if resp.hovered() || open {
         ui.painter().rect_filled(gear, 6.0, theme::BORDER);
     }
@@ -89,16 +89,16 @@ pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
                 .corner_radius(CornerRadius::same(12))
                 .inner_margin(Margin::same(12)),
         )
-        .show(|ui| offset_slider(ui, state, actions));
+        .show(|ui| offset_slider(ui, state, &m.visual_offset, actions));
 }
 
-fn offset_slider(ui: &mut Ui, state: &mut UiState, actions: &mut Vec<UiAction>) {
+fn offset_slider(ui: &mut Ui, state: &mut UiState, label: &str, actions: &mut Vec<UiAction>) {
     let (title, _) = ui.allocate_exact_size(vec2(200.0, 14.0), Sense::hover());
     widgets::text(
         ui.painter(),
         title.left_center(),
         Align2::LEFT_CENTER,
-        "OFFSET VISUAL (MS)",
+        &label.to_uppercase(),
         theme::font_mono(9.0),
         theme::TEXT_MUTED,
         1.5,
@@ -109,7 +109,7 @@ fn offset_slider(ui: &mut Ui, state: &mut UiState, actions: &mut Vec<UiAction>) 
         .min(MAX_VISUAL_OFFSET_MS);
     let before = ms;
     let changed = ui
-        .name_inputs(OFFSET_LABEL, |ui| {
+        .name_inputs(label, |ui| {
             ui.spacing_mut().slider_width = 150.0;
             ui.add(
                 Slider::new(&mut ms, 0..=MAX_VISUAL_OFFSET_MS)

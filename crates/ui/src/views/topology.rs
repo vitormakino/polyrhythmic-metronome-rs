@@ -1,5 +1,5 @@
 //! Rhythm topology: one ring per pulse, one dot per beat, a central flash on
-//! the downbeat and a "coincidência" light when every pulse hits beat 0 together.
+//! the downbeat and a coincidence light when every pulse hits beat 0 together.
 //!
 //! The web version put ring `i` at radius `110 - 25 i`, so from the 6th pulse
 //! on the radius was <= 0 and the rings vanished, and with many beats the dots
@@ -14,9 +14,6 @@ use egui::{Align2, Color32, Pos2, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetIn
 use super::widgets;
 use crate::state::UiState;
 use crate::theme;
-
-/// Name of the topology square in the accessibility tree (tests and automation find its rect by it).
-pub const LABEL: &str = "Topologia rítmica";
 
 /// Ring radii as fractions of the half-size.
 const OUTER: f32 = 0.95;
@@ -114,7 +111,7 @@ fn strip_height(size: f32) -> f32 {
 /// indicators in a strip at the bottom (outside the ring area).
 pub fn topology(ui: &mut Ui, state: &UiState, size: f32) {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
-    response.widget_info(|| WidgetInfo::labeled(Role::Image, true, LABEL));
+    response.widget_info(|| WidgetInfo::labeled(Role::Image, true, &state.messages.topology));
     let painter = ui.painter_at(rect);
 
     let strip = strip_height(size);
@@ -182,16 +179,17 @@ pub fn topology(ui: &mut Ui, state: &UiState, size: f32) {
     indicators(&painter, rect, strip, size, state);
 }
 
-/// "COINCIDÊNCIA" light and "ENGINE" status in the strip under the rings.
+/// Coincidence light and engine status in the strip under the rings.
 fn indicators(painter: &egui::Painter, rect: egui::Rect, strip: f32, size: f32, state: &UiState) {
     const LIGHT: f32 = 3.0;
     const SPACING: f32 = 1.2;
     const GAP: f32 = 6.0;
     const BETWEEN: f32 = 20.0;
+    let m = &state.messages;
     let font = theme::font_mono(8.0);
     let y = rect.bottom() - strip / 2.0;
-    let coincidence_w = widgets::text_width(painter, "COINCIDÊNCIA", font.clone(), SPACING);
-    let engine_w = widgets::text_width(painter, "ENGINE", font.clone(), SPACING);
+    let coincidence_w = widgets::text_width(painter, &m.coincidence, font.clone(), SPACING);
+    let engine_w = widgets::text_width(painter, &m.engine, font.clone(), SPACING);
     let light_w = 2.0 * LIGHT * 1.25;
     let first = light_w + GAP + coincidence_w;
     let second = engine_w + GAP + light_w;
@@ -217,7 +215,7 @@ fn indicators(painter: &egui::Painter, rect: egui::Rect, strip: f32, size: f32, 
         painter,
         pos2(x, y),
         Align2::LEFT_CENTER,
-        "COINCIDÊNCIA",
+        &m.coincidence,
         font.clone(),
         theme::TEXT_MUTED,
         SPACING,
@@ -228,7 +226,7 @@ fn indicators(painter: &egui::Painter, rect: egui::Rect, strip: f32, size: f32, 
             painter,
             pos2(x, y),
             Align2::LEFT_CENTER,
-            "ENGINE",
+            &m.engine,
             font,
             theme::TEXT_MUTED,
             SPACING,

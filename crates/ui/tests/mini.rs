@@ -1,12 +1,20 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, Vec2};
 use egui_kittest::kittest::Queryable as _;
 use egui_kittest::{Harness, SnapshotOptions, wgpu::WgpuTestRenderer};
 use pm_core::{Bpm, Pattern};
+use pm_ui::i18n::Messages;
 use pm_ui::state::{UiAction, UiState, WindowMode};
 use pm_ui::theme;
 use pm_ui::views::mini::{DEFAULT_SIZE, MIN_SIZE, mini_view};
+
+/// The v1 snapshots are Brazilian Portuguese; they must not change.
+fn pt_br(mut state: UiState) -> UiState {
+    state.messages = Arc::new(Messages::builtin("pt-BR").expect("pt-BR is embedded"));
+    state
+}
 
 struct App {
     ui: UiState,
@@ -67,10 +75,10 @@ fn wheel(h: &mut Harness<'static, App>, notches: f32) {
 #[test]
 fn mini_bpm_and_play() {
     let mut h = harness(UiState::default());
-    click(&mut h, "Aumentar BPM");
+    click(&mut h, "Increase BPM");
     assert_eq!(h.state().ui.bpm.get(), 121);
-    click(&mut h, "Diminuir BPM");
-    click(&mut h, "Diminuir BPM");
+    click(&mut h, "Decrease BPM");
+    click(&mut h, "Decrease BPM");
     assert_eq!(h.state().ui.bpm.get(), 119);
     assert!(h.state().actions.contains(&UiAction::SetBpm(Bpm::new(119))));
 
@@ -130,15 +138,15 @@ fn mini_drag_changes_bpm_per_4px() {
 #[test]
 fn mini_has_no_pulse_controls() {
     let h = harness(UiState::default());
-    assert!(h.query_by_label("Pulso 1: remover").is_none());
-    assert!(h.query_by_label("ADICIONAR PULSO").is_none());
-    assert!(h.query_by_label("Pulso 1: ajustes").is_none());
+    assert!(h.query_by_label("Pulse 1: remove").is_none());
+    assert!(h.query_by_label("ADD PULSE").is_none());
+    assert!(h.query_by_label("Pulse 1: settings").is_none());
 }
 
 #[test]
 fn expand_emits_toggle() {
     let mut h = harness(UiState::default());
-    click(&mut h, "Expandir");
+    click(&mut h, "Expand");
     assert_eq!(h.state().actions, vec![UiAction::ToggleMini]);
     assert_eq!(h.state().ui.mode, WindowMode::Full);
 }
@@ -147,7 +155,7 @@ fn expand_emits_toggle() {
 fn min_size_fits_every_control() {
     let h = harness_with(MIN_SIZE, UiState::default(), None);
     let window = egui::Rect::from_min_size(egui::Pos2::ZERO, MIN_SIZE);
-    for label in ["Diminuir BPM", "Aumentar BPM", "Play", "Expandir", "BPM"] {
+    for label in ["Decrease BPM", "Increase BPM", "Play", "Expand", "BPM"] {
         let r = h.get_by_label(label).rect();
         assert!(window.contains_rect(r), "{label} {r:?} outside {window:?}");
     }
@@ -191,10 +199,15 @@ fn snapshot(name: &str, state: UiState) {
 
 #[test]
 fn mini_default() {
-    snapshot("mini_default", UiState::default());
+    snapshot("mini_default", pt_br(UiState::default()));
 }
 
 #[test]
 fn mini_many() {
-    snapshot("mini_many", many());
+    snapshot("mini_many", pt_br(many()));
+}
+
+#[test]
+fn mini_default_en() {
+    snapshot("mini_default_en", UiState::default());
 }
