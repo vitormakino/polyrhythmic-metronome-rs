@@ -54,6 +54,27 @@ pub struct Messages {
     pub tray_open: String,
     pub tray_mini: String,
     pub tray_quit: String,
+    /// Accessible name of the session selector.
+    pub session_select: String,
+    pub session_none: String,
+    pub session_stage: String,
+    pub session_bar: String,
+    pub session_time: String,
+    pub session_tempo_set: String,
+    pub session_tempo_jump: String,
+    pub session_tempo_ramp: String,
+    pub session_tempo_limit: String,
+    pub session_bars: String,
+    pub session_seconds: String,
+    pub session_mute_cycle: String,
+    pub session_random_mute: String,
+    pub session_pulse_off: String,
+    pub session_pulse_muted: String,
+    pub session_pulse_on: String,
+    pub session_missing_pulse: String,
+    pub session_muted_now: String,
+    pub session_done: String,
+    pub session_done_continue: String,
 }
 
 impl Messages {

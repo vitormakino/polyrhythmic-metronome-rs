@@ -64,7 +64,10 @@ impl Controller {
             UiAction::SetBpm(bpm) => self.push(audio, Outgoing::Command(Command::SetBpm(bpm))),
             UiAction::PatternChanged => self.push(audio, Outgoing::Pattern),
             // The view applies the tapped tempo itself and sends `SetBpm`.
-            UiAction::Tap(_) | UiAction::ToggleMini | UiAction::SetVisualOffset(_) => {}
+            UiAction::Tap(_)
+            | UiAction::ToggleMini
+            | UiAction::SetVisualOffset(_)
+            | UiAction::SelectSession => {}
         }
     }
 

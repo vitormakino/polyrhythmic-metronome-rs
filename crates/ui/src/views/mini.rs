@@ -1,6 +1,7 @@
 //! The mini window: a small always-on-top card with the animated topology,
 //! the tempo (buttons, scroll and drag on the number) and Play/Stop. No pulse
-//! editing; the expand button goes back to the full window.
+//! editing; the expand button goes back to the full window. With a session
+//! selected, a thin stage bar sits in the gap above Play.
 
 use std::time::Instant;
 
@@ -8,6 +9,7 @@ use egui::{Rect, Ui, UiBuilder, Vec2, pos2, vec2};
 
 use super::bpm_card::{bpm_gestures, bpm_stepper};
 use super::full::play_button;
+use super::session_strip::stage_bar;
 use super::topology::topology;
 use super::widgets;
 use crate::state::{UiAction, UiState, WindowMode};
@@ -30,6 +32,7 @@ pub fn mini_view(ui: &mut Ui, state: &mut UiState, _now: Instant) -> Vec<UiActio
     let t = state.theme.clone();
     let card = ui.max_rect();
     theme::paint_card(ui.painter(), &t, card, t.border, 0.0);
+    state.keep_session_summary();
     let inner = card.shrink(PAD);
 
     let play = Rect::from_min_max(pos2(inner.left(), inner.bottom() - PLAY_H), inner.max);
@@ -54,6 +57,13 @@ pub fn mini_view(ui: &mut Ui, state: &mut UiState, _now: Instant) -> Vec<UiActio
     );
     bpm_gestures(ui, number.expand2(vec2(4.0, 6.0)), state, &mut actions);
 
+    if state.session.is_some() {
+        let bar = Rect::from_min_max(
+            pos2(inner.left(), play.top() - GAP + 1.0),
+            pos2(inner.right(), play.top() - 1.0),
+        );
+        stage_bar(ui.painter(), bar, state);
+    }
     play_button(ui, play, state, false, &mut actions);
 
     // Expand: a small corner button, over the card's top-right.

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pm_audio::BeatEvent;
+use pm_core::session::{PulseMask, SessionProgress};
 use pm_core::{Bpm, Pattern, PulseId, TapTempo};
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +53,8 @@ pub enum UiAction {
     /// Switch between the full and the mini window; `UiState::mode` already flipped.
     ToggleMini,
     SetVisualOffset(Duration),
+    /// The user picked another session (or none); `UiState::session` already holds it.
+    SelectSession,
 }
 
 /// The beat a pulse lit last and its flash animation.
@@ -91,6 +94,15 @@ pub struct UiState {
     /// Every color the views paint with. Assigning a new value switches the
     /// theme (call `theme::apply` too, for the egui visuals); no action is involved.
     pub theme: Arc<Theme>,
+    /// Sessions the user can pick, in the order shown. Empty: no session strip.
+    pub sessions: Arc<[SessionEntry]>,
+    /// Name of the selected session; `None` is "No session".
+    pub session: Option<String>,
+    /// Where the engine's session is, set by the app every frame.
+    pub session_progress: Option<SessionProgress>,
+    /// The progress of the session that finished, shown until the next Play
+    /// or another selection.
+    pub session_summary: Option<SessionProgress>,
 }
 
 impl Default for UiState {
@@ -113,6 +125,10 @@ impl Default for UiState {
             dragging: None,
             messages: Arc::new(Messages::english()),
             theme: Arc::new(DARK),
+            sessions: Arc::new([]),
+            session: None,
+            session_progress: None,
+            session_summary: None,
         }
     }
 }
@@ -121,8 +137,17 @@ impl UiState {
     /// Queues a beat from the engine; it lights in [`Self::advance`] once its time comes.
     /// Ignored while stopped, so beats still in flight after Stop never light.
     /// At most [`PENDING_BEATS_CAP`] beats wait; the oldest is dropped first.
+    /// A hit the session silenced (`muted`) is ignored too, unless the
+    /// session plan shows muted visuals.
     pub fn on_beat(&mut self, ev: &BeatEvent) {
         if !self.playing {
+            return;
+        }
+        if ev.muted
+            && !self
+                .selected_session()
+                .is_some_and(|s| s.plan.show_muted_visuals)
+        {
             return;
         }
         if self.pending.len() == PENDING_BEATS_CAP {
@@ -157,17 +182,18 @@ impl UiState {
                 },
             );
         }
+        let shown = self.shown_enabled();
         let pattern = &self.pattern;
         self.lit.retain(|id, _| pattern.pulse(*id).is_some());
         for lit in self.lit.values_mut() {
             lit.flash.step(dt);
         }
         self.dots.retain(|id, _| pattern.pulse(*id).is_some());
-        for pulse in &pattern.pulses {
+        for (pulse, &enabled) in pattern.pulses.iter().zip(&shown) {
             let lit_beat = self
                 .lit
                 .get(&pulse.id)
-                .filter(|_| pulse.enabled)
+                .filter(|_| enabled)
                 .map(|l| l.beat as usize);
             let springs = self.dots.entry(pulse.id).or_default();
             springs.resize(pulse.beats as usize, Spring::new(0.0));
@@ -209,7 +235,8 @@ impl UiState {
             return false;
         }
         let mut frame = None;
-        for pulse in self.pattern.pulses.iter().filter(|p| p.enabled) {
+        let shown = self.shown_enabled();
+        for (pulse, _) in self.pattern.pulses.iter().zip(shown).filter(|(_, on)| *on) {
             match self.lit.get(&pulse.id) {
                 Some(l) if l.beat == 0 && frame.is_none_or(|f| f == l.frame) => {
                     frame = Some(l.frame);
@@ -226,8 +253,9 @@ impl UiState {
         self.pattern
             .pulses
             .iter()
-            .filter(|p| p.enabled)
-            .filter_map(|p| self.lit.get(&p.id).filter(|l| l.beat == 0))
+            .zip(self.shown_enabled())
+            .filter(|(_, on)| *on)
+            .filter_map(|(p, _)| self.lit.get(&p.id).filter(|l| l.beat == 0))
             .map(|l| l.flash.value.clamp(0.0, 1.0))
             .fold(0.0, f32::max)
     }
@@ -253,8 +281,75 @@ impl UiState {
         let at = now.saturating_duration_since(self.tap_epoch);
         actions.push(UiAction::Tap(at));
         if let Some(bpm) = self.tap.tap(at) {
-            self.bpm = bpm;
-            actions.push(UiAction::SetBpm(bpm));
+            self.set_shown_bpm(bpm, actions);
+        }
+    }
+
+    /// The selected session's entry, if it is still in [`Self::sessions`].
+    pub fn selected_session(&self) -> Option<&SessionEntry> {
+        let name = self.session.as_deref()?;
+        self.sessions.iter().find(|s| s.name == name)
+    }
+
+    /// The progress of the session playing now: playing and not finished.
+    pub fn running_session(&self) -> Option<&SessionProgress> {
+        self.session_progress
+            .as_ref()
+            .filter(|p| self.playing && !p.finished)
+    }
+
+    /// The tempo the views show: the session's while one runs, else the base.
+    pub fn shown_bpm(&self) -> Bpm {
+        self.running_session().map_or(self.bpm, |p| p.moment.bpm)
+    }
+
+    /// The user set the shown tempo to `new`: the base moves by the same
+    /// amount (clamped), so the session's own changes never reach the setup,
+    /// and `SetBpm(new)` is pushed. Without a running session this is
+    /// `bpm = new`.
+    pub fn set_shown_bpm(&mut self, new: Bpm, actions: &mut Vec<UiAction>) {
+        let shift = i32::from(new.get()) - i32::from(self.shown_bpm().get());
+        self.bpm = Bpm::new(i32::from(self.bpm.get()) + shift);
+        if self.running_session().is_some()
+            && let Some(p) = &mut self.session_progress
+        {
+            // Shown at once; the engine's next progress confirms it.
+            p.moment.bpm = new;
+        }
+        actions.push(UiAction::SetBpm(new));
+    }
+
+    /// Whether pulse `index` (0-based) shows as on: the pattern's `enabled`
+    /// with the running session's mask applied (`off` hides it, `forced_on`
+    /// shows it).
+    pub fn pulse_shown_enabled(&self, index: usize) -> bool {
+        let Some(pulse) = self.pattern.pulses.get(index) else {
+            return false;
+        };
+        let mask = self.running_session().map(|p| p.moment.pulses);
+        shown(pulse.enabled, mask, index)
+    }
+
+    fn shown_enabled(&self) -> Vec<bool> {
+        (0..self.pattern.pulses.len())
+            .map(|i| self.pulse_shown_enabled(i))
+            .collect()
+    }
+
+    /// Keeps a finished progress as the summary, so it outlives the app
+    /// dropping the progress after the session stopped itself.
+    pub(crate) fn keep_session_summary(&mut self) {
+        if let Some(p) = self.session_progress.filter(|p| p.finished) {
+            self.session_summary = Some(p);
+        }
+    }
+
+    /// Selects session `name` (`None`: no session) and forgets the summary.
+    pub(crate) fn select_session(&mut self, name: Option<String>, actions: &mut Vec<UiAction>) {
+        if self.session != name {
+            self.session = name;
+            self.session_summary = None;
+            actions.push(UiAction::SelectSession);
         }
     }
 
@@ -267,5 +362,20 @@ impl UiState {
         if !self.settings_open.remove(&pulse) {
             self.settings_open.insert(pulse);
         }
+    }
+}
+
+/// `enabled` as `mask` overrides it at position `index`.
+fn shown(enabled: bool, mask: Option<PulseMask>, index: usize) -> bool {
+    let Some(mask) = mask else {
+        return enabled;
+    };
+    let bit = 1u16.checked_shl(index as u32).unwrap_or(0);
+    if mask.off & bit != 0 {
+        false
+    } else if mask.forced_on & bit != 0 {
+        true
+    } else {
+        enabled
     }
 }
