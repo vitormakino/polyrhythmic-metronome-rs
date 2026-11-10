@@ -100,6 +100,7 @@ fn run(args: &Args) -> Result<bool, String> {
         bpm,
         // Plays from the first frame, so engine frame N is recording frame N.
         resume: Some(MusicalPosition::start_of(0)),
+        session: None,
     };
 
     let stop = Arc::new(AtomicBool::new(false));

@@ -53,6 +53,7 @@ fn hit(state: &mut UiState, hits: &[(usize, u32, u64)]) {
             beat,
             frame,
             at,
+            muted: false,
         });
     }
     state.advance(at + Duration::from_millis(1), 0.001);

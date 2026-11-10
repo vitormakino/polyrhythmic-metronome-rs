@@ -143,6 +143,82 @@ pub struct SessionProgress {
     state: Runner,
 }
 
+/// Length of [`SessionProgress::to_words`].
+pub const PROGRESS_WORDS: usize = 12;
+
+impl SessionProgress {
+    /// The snapshot as plain words, so it can cross threads through atomics
+    /// (a seqlock) without copying its bytes. [`from_words`](Self::from_words)
+    /// gives it back: `frames_in_stage` and `total_frames` as stored, every
+    /// other public field derived from the runner state, as
+    /// [`Runner::progress`] does. Never allocates.
+    pub fn to_words(&self) -> [u64; PROGRESS_WORDS] {
+        let r = &self.state;
+        let lo_hi = |lo: u32, hi: u32| u64::from(lo) | u64::from(hi) << 32;
+        let flags = u64::from(r.silent)
+            | u64::from(r.first) << 1
+            | u64::from(r.frozen) << 2
+            | u64::from(r.finished) << 3;
+        [
+            lo_hi(r.sample_rate, r.stage),
+            lo_hi(r.stages, r.bars_in_stage),
+            r.stage_start,
+            r.session_start,
+            r.last_frame,
+            u64::from(r.current.get())
+                | u64::from(r.max_bpm.get()) << 16
+                | u64::from(r.user_bits) << 32
+                | u64::from(r.random_percent) << 48
+                | flags << 56,
+            lo_hi(r.origin as u32, r.ramp_delta as u32),
+            u64::from(r.base as u32) | u64::from(r.mask.off) << 32 | u64::from(r.mask.muted) << 48,
+            u64::from(r.mask.forced_on),
+            r.rng,
+            self.frames_in_stage,
+            self.total_frames,
+        ]
+    }
+
+    /// Inverse of [`to_words`](Self::to_words).
+    pub fn from_words(w: &[u64; PROGRESS_WORDS]) -> SessionProgress {
+        let lo = |x: u64| x as u32;
+        let hi = |x: u64| (x >> 32) as u32;
+        let bpm = |x: u64| Bpm::new(i32::from(x as u16));
+        let flags = w[5] >> 56;
+        let r = Runner {
+            sample_rate: lo(w[0]),
+            stage: hi(w[0]),
+            stages: lo(w[1]),
+            bars_in_stage: hi(w[1]),
+            stage_start: w[2],
+            session_start: w[3],
+            last_frame: w[4],
+            current: bpm(w[5]),
+            max_bpm: bpm(w[5] >> 16),
+            user_bits: (w[5] >> 32) as u16,
+            random_percent: (w[5] >> 48) as u8,
+            silent: flags & 1 != 0,
+            first: flags & 2 != 0,
+            frozen: flags & 4 != 0,
+            finished: flags & 8 != 0,
+            origin: lo(w[6]) as i32,
+            ramp_delta: hi(w[6]) as i32,
+            base: lo(w[7]) as i32,
+            mask: PulseMask {
+                off: (w[7] >> 32) as u16,
+                muted: (w[7] >> 48) as u16,
+                forced_on: w[8] as u16,
+            },
+            rng: w[9],
+        };
+        SessionProgress {
+            frames_in_stage: w[10],
+            total_frames: w[11],
+            ..r.progress()
+        }
+    }
+}
+
 const DEFAULT_RNG_STATE: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// The session state machine. `Copy`, no heap.

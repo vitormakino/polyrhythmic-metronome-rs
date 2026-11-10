@@ -253,6 +253,7 @@ fn visual_waits_for_offset() {
         beat: 0,
         frame: 0,
         at: t0,
+        muted: false,
     });
     state.advance(t0 + Duration::from_millis(150), 0.016);
     assert_eq!(state.active_beat(pulse), None);
@@ -274,6 +275,7 @@ fn queued_beats_are_bounded_and_keep_the_newest() {
             beat: i as u32,
             frame: i,
             at: t0 + Duration::from_millis(i),
+            muted: false,
         });
     }
     assert_eq!(state.pending_beats(), PENDING_BEATS_CAP);
@@ -292,6 +294,7 @@ fn beats_are_ignored_while_stopped() {
         beat: 1,
         frame: 0,
         at: t0,
+        muted: false,
     });
     state.advance(t0 + Duration::from_millis(10), 0.016);
     assert_eq!(state.active_beat(pulse), None);

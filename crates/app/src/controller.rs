@@ -146,6 +146,7 @@ mod tests {
                 Command::Play => "Play".to_owned(),
                 Command::Stop => "Stop".to_owned(),
                 Command::SetBpm(b) => format!("Bpm {}", b.get()),
+                Command::Session(_) => "Session".to_owned(),
                 Command::SetPattern(u) => {
                     // Which rate the clips were built at, by clip length.
                     let len = u.bank.clip(0, false).len();
@@ -184,6 +185,7 @@ mod tests {
             beat: 2,
             frame: 100,
             at: now - Duration::from_millis(5),
+            muted: false,
         });
         c.ui.advance(now, 0.016);
         assert_eq!(c.ui.active_beat(pulse), Some(2));
@@ -215,6 +217,7 @@ mod tests {
             beat: 1,
             frame: 200,
             at: Instant::now() + Duration::from_secs(5),
+            muted: false,
         });
         c.set_playing(&mut audio, true);
         assert_eq!(c.ui.active_beat(pulse), None);

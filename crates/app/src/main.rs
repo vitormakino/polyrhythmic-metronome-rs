@@ -413,6 +413,7 @@ fn main() -> eframe::Result {
         pattern: settings.pattern.clone(),
         bpm: settings.bpm,
         resume: None,
+        session: None,
     }) {
         Ok(audio) => audio,
         Err(e) => {

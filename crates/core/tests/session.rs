@@ -369,6 +369,39 @@ fn resume_roundtrip() {
 }
 
 #[test]
+fn progress_words_roundtrip() {
+    let mut s = ramp_stage(Span::Bars(8), -3, Span::Bars(1), Some(80), false);
+    s.mute = Some(MuteCycle {
+        play: Span::Bars(1),
+        mute: Span::Bars(1),
+    });
+    s.random_mute = Some(RandomMute {
+        percent: 30,
+        increase: 5,
+        every_bars: 1,
+        max: 90,
+    });
+    s.pulses[1] = Some(PulseState::Off);
+    s.pulses[2] = Some(PulseState::Muted);
+    s.pulses[15] = Some(PulseState::On);
+    let p = plan(vec![s], OnFinish::Repeat);
+    let mut r = Runner::start(&p, Bpm::new(100), SR, 12_345);
+    for i in 0..4 {
+        r.bar(&p, 12_345 + i * BAR);
+    }
+    r.user_pulse(2);
+    r.user_bpm(Bpm::new(99));
+    r.draw(50);
+    let p0 = r.progress();
+    let p1 = pm_core::SessionProgress::from_words(&p0.to_words());
+    assert_eq!(p1, p0);
+    // The rebuilt runner goes on exactly like the original.
+    let (mut a, mut b) = (r, Runner::resume(&p1, SR, 12_345 + 3 * BAR));
+    assert_eq!(a.bar(&p, 12_345 + 4 * BAR), b.bar(&p, 12_345 + 4 * BAR));
+    assert_eq!(a.draw(50), b.draw(50));
+}
+
+#[test]
 fn runner_is_copy_and_small() {
     fn is_copy<T: Copy>() {}
     is_copy::<Runner>();
