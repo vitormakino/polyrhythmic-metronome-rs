@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "additionalProperties": false,
+  "description": "The settings in `config.toml`.",
+  "properties": {
+    "language": {
+      "anyOf": [
+        {
+          "enum": [
+            "en",
+            "pt-BR"
+          ]
+        },
+        {
+          "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
+          "type": "string"
+        }
+      ],
+      "default": "en",
+      "description": "Interface language: \"en\" (default), \"pt-BR\", or the code of a file in locales/."
+    }
+  },
+  "title": "Polyrhythmic Metronome configuration",
+  "type": "object"
+}

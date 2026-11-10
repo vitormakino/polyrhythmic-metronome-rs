@@ -13,6 +13,7 @@
 //! their events come through a channel as [`Remote`]s, drained in `logic`,
 //! so they work while the window is hidden.
 
+mod config;
 mod controller;
 mod hotkeys;
 mod remote;
