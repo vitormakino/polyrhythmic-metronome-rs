@@ -1,5 +1,6 @@
 //! Colors, fonts and the painted primitives (card, glow, top accent) that give
-//! the native UI the look of the web app: dark zinc, orange accent, glowing cards.
+//! the native UI the look of the web app: a theme of roles (background, card,
+//! text, accent, pulse colors) and glowing cards painted from it.
 
 use egui::epaint::{Mesh, Shadow};
 use egui::{
@@ -48,7 +49,8 @@ pub struct Theme {
     /// Fill of a hovered control.
     pub hover_fill: Color32,
     pub accent: Color32,
-    /// End of the top accent gradient.
+    /// End of the top accent gradient: lighter than `accent` in dark themes,
+    /// darker in light ones.
     pub accent_light: Color32,
     /// Strongest foreground: BPM digits, topology light, selected number.
     pub strong: Color32,
@@ -98,6 +100,12 @@ fn relative_luminance(c: Color32) -> f32 {
     0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
 }
 
+/// WCAG contrast ratio between two colors (1 identical, 21 black on white).
+pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (relative_luminance(a), relative_luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
 impl Theme {
     /// Derives every role from an Omarchy-style palette.
     pub fn from_palette(p: &Palette) -> Theme {
@@ -119,10 +127,12 @@ impl Theme {
             accent: p.accent,
             accent_light: mix(p.accent, p.bright_foreground, 0.4),
             strong: p.bright_foreground,
-            on_accent: if relative_luminance(p.accent) < 0.5 {
+            on_accent: if contrast_ratio(Color32::WHITE, p.accent) >= 3.0 {
                 Color32::WHITE
-            } else {
+            } else if relative_luminance(p.background) <= relative_luminance(p.foreground) {
                 p.background
+            } else {
+                p.foreground
             },
             shadow: Color32::from_black_alpha(if dark { 90 } else { 30 }),
             overlay: Color32::from_black_alpha(if dark { 51 } else { 20 }),
@@ -132,7 +142,7 @@ impl Theme {
 
     /// The embedded theme called `name`, if any.
     pub fn builtin(name: &str) -> Option<Theme> {
-        match name {
+        match name.to_ascii_lowercase().as_str() {
             "default" => Some(DARK),
             "light" => Some(Theme::from_palette(&Palette::LIGHT)),
             _ => None,
@@ -300,7 +310,7 @@ pub fn apply(ctx: &egui::Context, theme: &Theme) {
     ctx.set_visuals_of(egui::Theme::Light, visuals);
 }
 
-/// Install fonts and the dark visuals. Call once at startup.
+/// Install fonts and the default theme's visuals. Call once at startup.
 pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
     apply(ctx, &DARK);
@@ -321,7 +331,7 @@ pub fn glow_layer_count(intensity: f32) -> usize {
     }
 }
 
-/// Card with the web look: zinc-900 fill, 1 px border, rounded-3xl, a dark
+/// Card with the web look: theme card fill, 1 px theme border, rounded-3xl, a
 /// drop shadow, and a colored halo (`0 0 20px color33`) scaled by `glow` (0..=1).
 /// `border` is also the glow color.
 pub fn paint_card(painter: &Painter, theme: &Theme, rect: Rect, border: Color32, glow: f32) {
@@ -440,7 +450,7 @@ pub fn paint_band(painter: &Painter, card: Rect, radius: f32, band: Rect, color:
     paint_clipped_band(painter, card, radius, band, |_| color);
 }
 
-/// 4 px orange-500 to orange-300 gradient line along the top edge of a card
+/// 4 px gradient line, `accent` to `accent_light`, along the top edge of a card
 /// (inside its 1 px border), at 50 % opacity, clipped to the card's rounded
 /// top corners like the web's `overflow-hidden`.
 pub fn paint_top_accent(painter: &Painter, theme: &Theme, rect: Rect) {
@@ -534,14 +544,40 @@ mod tests {
     }
 
     #[test]
+    fn contrast_ratio_matches_wcag() {
+        let c = contrast_ratio(Color32::WHITE, Color32::BLACK);
+        assert!((c - 21.0).abs() < 0.01, "{c}");
+        assert!((contrast_ratio(Color32::RED, Color32::RED) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
     fn on_accent_stays_readable() {
         let mut p = Palette::DEFAULT;
         p.accent = Color32::from_rgb(0xff, 0xf0, 0x80); // light yellow accent
         assert_eq!(Theme::from_palette(&p).on_accent, p.background);
-        assert_eq!(
-            Theme::from_palette(&Palette::DEFAULT).on_accent,
-            Color32::WHITE
-        );
+        // White is kept while it reaches 3:1 (light #ea580c: 3.56).
+        let light = Theme::from_palette(&Palette::LIGHT);
+        assert_eq!(light.on_accent, Color32::WHITE);
+        // Orange #f97316 is too bright for white (2.8): the darker of
+        // background and foreground takes over.
+        let orange = Theme::from_palette(&Palette::DEFAULT);
+        assert_eq!(orange.on_accent, Palette::DEFAULT.background);
+        // Tokyo Night's blue accent #7aa2f7 gets dark text, readable.
+        let text = include_str!("../tests/fixtures/tokyo-night.toml");
+        let (tokyo, _) = crate::palette::parse(text, &Palette::DEFAULT).unwrap();
+        let t = Theme::from_palette(&tokyo);
+        assert_eq!(t.on_accent, tokyo.background);
+        assert!(contrast_ratio(t.on_accent, t.accent) >= 4.5);
+        // The built-in themes are always readable.
+        for theme in [&light, &orange] {
+            assert!(contrast_ratio(theme.on_accent, theme.accent) >= 3.0);
+        }
+    }
+
+    #[test]
+    fn builtin_names_ignore_case() {
+        assert_eq!(Theme::builtin("Light"), Theme::builtin("light"));
+        assert_eq!(Theme::builtin("DEFAULT"), Some(DARK));
     }
 
     #[test]

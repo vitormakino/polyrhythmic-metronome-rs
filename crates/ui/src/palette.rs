@@ -111,9 +111,9 @@ impl Palette {
     /// The built-in light palette.
     pub const LIGHT: Palette = Palette {
         mode: Mode::Light,
-        background: hex(0xfafafa),
-        dark_background: hex(0xf4f4f5),
-        darker_background: hex(0xe4e4e7),
+        background: hex(0xf4f4f5),
+        dark_background: hex(0xe4e4e7),
+        darker_background: hex(0xd4d4d8),
         lighter_background: hex(0xffffff),
         selection: hex(0xe4e4e7),
         muted: hex(0xd4d4d8),
@@ -158,6 +158,17 @@ fn parse_color(s: &str) -> Option<Color32> {
     }
 }
 
+/// 1-based line of a top-level `key =`, or 1 when it cannot be found.
+fn key_line(text: &str, key: &str) -> usize {
+    text.lines()
+        .position(|l| {
+            l.trim_start()
+                .strip_prefix(key)
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+        })
+        .map_or(1, |i| i + 1)
+}
+
 /// Parses a palette file over `base`. Returns the palette and one warning per
 /// unknown key; a syntax error or an invalid value rejects the whole file.
 pub fn parse(text: &str, base: &Palette) -> Result<(Palette, Vec<String>), String> {
@@ -177,12 +188,20 @@ pub fn parse(text: &str, base: &Palette) -> Result<(Palette, Vec<String>), Strin
             palette.mode = match value.as_str() {
                 Some("dark") => Mode::Dark,
                 Some("light") => Mode::Light,
-                _ => return Err(format!("mode = {value}: expected \"dark\" or \"light\"")),
+                _ => {
+                    return Err(format!(
+                        "line {}: mode = {value}: expected \"dark\" or \"light\"",
+                        key_line(text, "mode")
+                    ));
+                }
             };
         } else if let Some(slot) = palette.slot(&key) {
             let color = value.as_str().and_then(parse_color);
             *slot = color.ok_or_else(|| {
-                format!("{key} = {value}: expected a color like \"#rrggbb\" or \"#rgb\"")
+                format!(
+                    "line {}: {key} = {value}: expected a color like \"#rrggbb\" or \"#rgb\"",
+                    key_line(text, &key)
+                )
             })?;
         } else {
             warnings.push(format!("unknown theme key \"{key}\" ignored"));
@@ -198,12 +217,12 @@ fn role(key: &str) -> &'static str {
         "selection" => "card and widget borders",
         "muted" => "inactive beat dots and pressed widgets",
         "background" => "window background",
-        "dark_background" => "darker window background",
-        "darker_background" => "darkest window background",
+        "dark_background" => "not used by the app (Omarchy key)",
+        "darker_background" => "not used by the app (Omarchy key)",
         "lighter_background" => "card background",
         "foreground" => "primary text",
         "dark_foreground" => "labels and idle icons",
-        "light_foreground" => "soft text",
+        "light_foreground" => "not used by the app (Omarchy key)",
         "bright_foreground" => "strongest text and highlights",
         "orange" => "pulse color 1",
         "blue" => "pulse color 2",
@@ -297,11 +316,14 @@ mod tests {
             ("accent = 3", "accent"),
             ("mode = \"dim\"", "dim"),
         ] {
-            let e = parse(text, &Palette::DEFAULT).unwrap_err();
+            // The offending key is on line 3.
+            let text = format!("# c\nmuted = \"#123\"\n{text}\n");
+            let e = parse(&text, &Palette::DEFAULT).unwrap_err();
             assert!(
                 e.contains(needle) && (e.contains("accent") || e.contains("mode")),
                 "{text}: {e}"
             );
+            assert!(e.contains("line 3"), "{text}: {e}");
         }
         assert!(
             parse("accent = \"#ABCDEF\"\r\n", &Palette::DEFAULT).is_ok(),

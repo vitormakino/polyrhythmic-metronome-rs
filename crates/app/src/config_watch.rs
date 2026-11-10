@@ -167,7 +167,10 @@ impl Loader {
         // `parse` only lets valid names through, so this never leaves `themes/`.
         let name = self.config.theme.clone();
         let path = dir.join("themes").join(format!("{name}.toml"));
-        let new = if RESERVED_THEMES.contains(&name.as_str()) {
+        let new = if RESERVED_THEMES
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(&name))
+        {
             // Reserved names always mean the built-in; a file of that name
             // is ignored (a successful read means it exists).
             if read(&path).is_ok() {
@@ -561,6 +564,32 @@ mod tests {
         assert_eq!(*r.appearance.unwrap().theme, DARK);
         assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
         assert!(r.diagnostics[0].contains("omarchy"));
+
+        // Reserved names match in any case: `Light` is the built-in too.
+        let mut l = Loader::default();
+        let r = l.reload(
+            &files(&[
+                ("/c/config.toml", "theme = \"Light\""),
+                ("/c/themes/Light.toml", "accent = \"#102030\""),
+            ]),
+            Path::new("/c"),
+        );
+        assert_eq!(
+            *r.appearance.expect("builtin light").theme,
+            Theme::builtin("light").unwrap()
+        );
+        assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
+        assert!(r.diagnostics[0].contains("reserved"));
+        let mut l = Loader::default();
+        let r = l.reload(
+            &files(&[("/c/config.toml", "theme = \"Light\"")]),
+            Path::new("/c"),
+        );
+        assert_eq!(
+            *r.appearance.expect("builtin light").theme,
+            Theme::builtin("light").unwrap()
+        );
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
 
         // The built-ins never read a file: no warning without one.
         let r = l.reload(

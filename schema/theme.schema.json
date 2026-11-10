@@ -63,7 +63,7 @@
       "type": "string"
     },
     "dark_background": {
-      "description": "darker window background; default #050506",
+      "description": "not used by the app (Omarchy key); default #050506",
       "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
       "type": "string"
     },
@@ -73,7 +73,7 @@
       "type": "string"
     },
     "darker_background": {
-      "description": "darkest window background; default #000000",
+      "description": "not used by the app (Omarchy key); default #000000",
       "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
       "type": "string"
     },
@@ -88,7 +88,7 @@
       "type": "string"
     },
     "light_foreground": {
-      "description": "soft text; default #d4d4d8",
+      "description": "not used by the app (Omarchy key); default #d4d4d8",
       "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
       "type": "string"
     },
