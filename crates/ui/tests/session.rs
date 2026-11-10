@@ -296,6 +296,47 @@ fn off_mask_shows_pulse_card_off() {
 }
 
 #[test]
+fn power_on_a_stage_off_pulse_takes_it_over() {
+    let state = running(plan("Off"), |p| p.moment.pulses.off = 0b10);
+    let mut h = harness(MEDIUM, state);
+    click(&mut h, "Pulse 2: mute");
+    let ui = &h.state().ui;
+    assert_eq!(
+        h.state().actions,
+        [UiAction::TakeOverPulse(1), UiAction::PatternChanged]
+    );
+    assert!(ui.pattern.pulses[1].enabled, "as clicked: on");
+    assert!(ui.pulse_shown_enabled(1), "shown on at once");
+    let toggled = h.get_by_label("Pulse 2: mute").accesskit_node().toggled();
+    assert_eq!(toggled, Some(Toggled::False));
+}
+
+#[test]
+fn power_off_a_forced_on_pulse_takes_it_over() {
+    let mut state = running(plan("On"), |p| p.moment.pulses.forced_on = 0b1);
+    let id = state.pattern.pulses[0].id;
+    state.pattern.set_enabled(id, false);
+    let mut h = harness(MEDIUM, state);
+    click(&mut h, "Pulse 1: mute");
+    let ui = &h.state().ui;
+    assert_eq!(
+        h.state().actions,
+        [UiAction::TakeOverPulse(0), UiAction::PatternChanged]
+    );
+    assert!(!ui.pattern.pulses[0].enabled, "as clicked: off");
+    assert!(!ui.pulse_shown_enabled(0));
+}
+
+#[test]
+fn power_on_a_pulse_the_stage_leaves_alone_is_a_plain_edit() {
+    let state = running(plan("Off"), |p| p.moment.pulses.off = 0b10);
+    let mut h = harness(MEDIUM, state);
+    click(&mut h, "Pulse 1: mute");
+    assert_eq!(h.state().actions, [UiAction::PatternChanged]);
+    assert!(!h.state().ui.pattern.pulses[0].enabled);
+}
+
+#[test]
 fn forced_on_mask_shows_a_disabled_pulse() {
     let mut state = running(plan("On"), |p| p.moment.pulses.forced_on = 0b1);
     let id = state.pattern.pulses[0].id;

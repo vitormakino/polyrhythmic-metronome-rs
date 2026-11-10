@@ -65,7 +65,14 @@ pub(crate) fn pulse_list(
         let p = &mut state.pattern;
         match edit {
             Edit::Beats(id, beats) => p.set_beats(id, beats),
-            Edit::Enabled(id, on) => p.set_enabled(id, on),
+            Edit::Enabled(id, on) => {
+                // `on` is the opposite of what the card shows: with the
+                // stage's override taken over, the pattern plays as clicked.
+                if let Some(index) = p.pulses.iter().position(|x| x.id == id) {
+                    state.take_over_pulse(index, actions);
+                }
+                state.pattern.set_enabled(id, on);
+            }
             Edit::Remove(id) => {
                 if !p.remove(id) {
                     continue;

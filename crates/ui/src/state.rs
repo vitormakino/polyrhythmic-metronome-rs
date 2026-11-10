@@ -55,6 +55,10 @@ pub enum UiAction {
     SetVisualOffset(Duration),
     /// The user picked another session (or none); `UiState::session` already holds it.
     SelectSession,
+    /// The user turned the pulse at this position (0-based) on or off while
+    /// the running stage overrides it: the user wins until the stage ends.
+    /// `PatternChanged` follows with the pattern's new `enabled`.
+    TakeOverPulse(usize),
 }
 
 /// The beat a pulse lit last and its flash animation.
@@ -327,6 +331,33 @@ impl UiState {
         };
         let mask = self.running_session().map(|p| p.moment.pulses);
         shown(pulse.enabled, mask, index)
+    }
+
+    /// Whether the running session's stage overrides pulse `index` (0-based):
+    /// off, muted or forced on.
+    pub fn pulse_overridden(&self, index: usize) -> bool {
+        let bit = 1u16.checked_shl(index as u32).unwrap_or(0);
+        self.running_session().is_some_and(|p| {
+            (p.moment.pulses.off | p.moment.pulses.muted | p.moment.pulses.forced_on) & bit != 0
+        })
+    }
+
+    /// The user turned pulse `index` on or off. If the running stage
+    /// overrides it, the user takes it over until the stage ends: the
+    /// override is dropped from the shown progress at once (the engine's
+    /// next progress confirms it) and `TakeOverPulse(index)` is pushed. The
+    /// caller sets the pattern's `enabled` to what the user clicked.
+    pub fn take_over_pulse(&mut self, index: usize, actions: &mut Vec<UiAction>) {
+        if !self.pulse_overridden(index) {
+            return;
+        }
+        if let Some(p) = &mut self.session_progress {
+            let keep = !(1u16 << index);
+            p.moment.pulses.off &= keep;
+            p.moment.pulses.muted &= keep;
+            p.moment.pulses.forced_on &= keep;
+        }
+        actions.push(UiAction::TakeOverPulse(index));
     }
 
     fn shown_enabled(&self) -> Vec<bool> {

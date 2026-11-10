@@ -72,6 +72,9 @@ impl Controller {
             UiAction::TogglePlay => self.set_playing(audio, self.ui.playing),
             UiAction::SetBpm(bpm) => self.push(audio, Outgoing::Command(Command::SetBpm(bpm))),
             UiAction::PatternChanged => self.push(audio, Outgoing::Pattern),
+            UiAction::TakeOverPulse(index) => {
+                self.push(audio, Outgoing::Command(Command::UserPulse(index)));
+            }
             // The view applies the tapped tempo itself and sends `SetBpm`.
             // A selection needs no command: the plan goes with the next Play
             // (and the selector is disabled while a session runs).
@@ -237,6 +240,7 @@ mod tests {
                 Command::Play => "Play".to_owned(),
                 Command::Stop => "Stop".to_owned(),
                 Command::SetBpm(b) => format!("Bpm {}", b.get()),
+                Command::UserPulse(i) => format!("UserPulse {i}"),
                 Command::Session(plan) => format!(
                     "Session {}",
                     plan.as_ref().map_or("None", |p| p.name.as_str())
@@ -481,6 +485,27 @@ mod tests {
         audio.full = false;
         c.flush(&mut audio);
         assert_eq!(audio.sent, ["Session warm", "Play"]);
+    }
+
+    #[test]
+    fn taking_over_a_pulse_sends_user_pulse_before_the_pattern() {
+        let (mut c, mut audio) = with_sessions(Some("warm"));
+        c.set_playing(&mut audio, true);
+        c.sync_session(
+            &mut audio,
+            Some(progress("warm", |p| p.moment.pulses.off = 0b10)),
+            true,
+        );
+        audio.sent.clear();
+        let mut actions = Vec::new();
+        c.ui.take_over_pulse(1, &mut actions);
+        // What the card does next: the pattern as clicked (already on).
+        actions.push(UiAction::PatternChanged);
+        for action in actions {
+            c.apply(&mut audio, action);
+        }
+        assert_eq!(audio.sent, ["UserPulse 1", "Pattern 2"]);
+        assert!(c.ui.pulse_shown_enabled(1));
     }
 
     #[test]

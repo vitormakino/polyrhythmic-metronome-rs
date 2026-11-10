@@ -252,6 +252,8 @@ impl Transport {
             }
             Command::SetBpm(bpm) => self.bpm = *bpm,
             Command::SetPattern(update) => self.pattern = update.pattern.clone(),
+            // The runner keeps it: a rebuild resumes it with the progress.
+            Command::UserPulse(_) => {}
             Command::Session(plan) => {
                 let plan = plan.as_deref().cloned();
                 if self.running {

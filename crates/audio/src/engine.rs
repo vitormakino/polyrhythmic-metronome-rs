@@ -383,6 +383,7 @@ impl Engine {
                 Command::SetBpm(bpm) => self.set_bpm(at, bpm),
                 Command::SetPattern(update) => self.set_pattern(at, update),
                 Command::Session(plan) => self.select_session(plan),
+                Command::UserPulse(position) => self.user_pulse(position),
             }
         }
     }
@@ -431,6 +432,14 @@ impl Engine {
         self.bpm = bpm;
         if let Some(active) = &mut self.active {
             active.runner.user_bpm(bpm);
+            active.moment = active.runner.progress().moment;
+            self.publish_session();
+        }
+    }
+
+    fn user_pulse(&mut self, position: usize) {
+        if let Some(active) = &mut self.active {
+            active.runner.user_pulse(position);
             active.moment = active.runner.progress().moment;
             self.publish_session();
         }

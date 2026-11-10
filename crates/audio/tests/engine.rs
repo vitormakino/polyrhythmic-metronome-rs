@@ -858,3 +858,76 @@ fn session_render_never_allocates() {
     assert!(h.garbage.pop().is_ok());
     assert_eq!(h.session.latest().unwrap().stages, 1);
 }
+
+/// Two 2-bar stages that both set pulse 2 to `state`.
+fn two_stages_with_pulse_2(state: PulseState) -> SessionPlan {
+    let mut s = sstage(Span::Bars(2));
+    s.pulses[1] = Some(state);
+    splan(vec![s.clone(), s], OnFinish::Stop)
+}
+
+/// Frames of pulse 2's hits that sounded (not muted, so a voice started).
+fn pulse_2_frames(p: &Pattern, events: &[BeatEvent]) -> Vec<u64> {
+    events
+        .iter()
+        .filter(|ev| ev.pulse == p.pulses[1].id && !ev.muted)
+        .map(|ev| ev.frame)
+        .collect()
+}
+
+#[test]
+fn user_pulse_turns_a_stage_off_pulse_on_until_the_stage_ends() {
+    let p = Pattern::default();
+    let (mut e, mut h) = session_engine(&p, 120, two_stages_with_pulse_2(PulseState::Off));
+    let mut events = Vec::new();
+    render(&mut e, &mut h, 1, &mut events);
+    // The pattern already has the pulse enabled: only the takeover tells.
+    send(&mut h, Command::UserPulse(1));
+    render(
+        &mut e,
+        &mut h,
+        (4 * BAR as usize).div_ceil(BUF),
+        &mut events,
+    );
+    let frames = pulse_2_frames(&p, &events);
+    let want: Vec<u64> = (1..6).map(|k| k * 32_000).collect();
+    assert_eq!(
+        frames
+            .iter()
+            .copied()
+            .filter(|&f| f < 4 * BAR)
+            .collect::<Vec<_>>(),
+        want,
+        "it sounds for the rest of stage 1, and stage 2 turns it off again"
+    );
+    assert_eq!(h.session.latest().unwrap().moment.pulses.off, 0b10);
+}
+
+#[test]
+fn user_pulse_silences_a_forced_on_pulse_until_the_stage_ends() {
+    let mut p = Pattern::default();
+    p.set_enabled(p.pulses[1].id, false);
+    let (mut e, mut h) = session_engine(&p, 120, two_stages_with_pulse_2(PulseState::On));
+    let mut events = Vec::new();
+    render(&mut e, &mut h, 1, &mut events);
+    assert_eq!(pulse_2_frames(&p, &events), [0], "forced on");
+    // The user turns it off: the pattern already has it disabled.
+    send(&mut h, Command::UserPulse(1));
+    render(
+        &mut e,
+        &mut h,
+        (4 * BAR as usize).div_ceil(BUF),
+        &mut events,
+    );
+    let frames = pulse_2_frames(&p, &events);
+    let want: Vec<u64> = [0].into_iter().chain((6..12).map(|k| k * 32_000)).collect();
+    assert_eq!(
+        frames
+            .iter()
+            .copied()
+            .filter(|&f| f < 4 * BAR)
+            .collect::<Vec<_>>(),
+        want,
+        "silent for the rest of stage 1, forced on again by stage 2"
+    );
+}

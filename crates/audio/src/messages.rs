@@ -23,6 +23,13 @@ pub enum Command {
     /// While a session runs, a pulse whose `enabled` changes is the user's
     /// until the stage ends (see [`Runner::user_pulse`](pm_core::Runner::user_pulse)).
     SetPattern(Box<PatternUpdate>),
+    /// The user turned the pulse at this position (0-based) on or off where
+    /// the running stage overrides it: the stage's override goes until the
+    /// stage ends and the pattern's `enabled` plays (see
+    /// [`Runner::user_pulse`](pm_core::Runner::user_pulse)). Needed when the
+    /// click leaves the pattern's `enabled` as it was, so `SetPattern` sees
+    /// no change. Ignored without a running session.
+    UserPulse(usize),
     /// Selects the session plan the next `Play` runs (`None`: plain
     /// metronome). While a session runs it keeps its plan; this one waits for
     /// the next `Play`. Replaced plans come back through
