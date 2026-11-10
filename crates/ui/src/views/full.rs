@@ -161,7 +161,7 @@ fn top_bar(ui: &Ui, rect: Rect, state: &UiState, wide: bool) {
         &painter,
         pos2(rect.left() + icon + 8.0, cy),
         Align2::LEFT_CENTER,
-        "POLYRHYTHMIC METRONOME",
+        &state.messages.app_heading,
         theme::font_bold(if wide { 20.0 } else { 14.0 }),
         theme::TEXT,
         0.0,
@@ -201,7 +201,7 @@ fn topology_card(ui: &mut Ui, rect: Rect, state: &UiState) {
             painter,
             pos2(rect.center().x, rect.top() + 28.0),
             Align2::CENTER_CENTER,
-            "TOPOLOGIA RÍTMICA",
+            &state.messages.topology.to_uppercase(),
             theme::font_mono(9.0),
             theme::TEXT_FAINT,
             3.6,
@@ -221,14 +221,15 @@ fn pulses_header(ui: &Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiA
         painter,
         pos2(rect.left() + 4.0, rect.center().y),
         Align2::LEFT_CENTER,
-        "PULSOS ATIVOS",
+        &state.messages.active_pulses,
         theme::font_mono(10.0),
         theme::TEXT_MUTED,
         2.0,
     );
     let font = theme::font_semibold(10.0);
-    let label = "ADICIONAR PULSO";
-    let text_w = widgets::text_width(painter, label, font.clone(), 0.5);
+    let m = state.messages.clone();
+    let label = m.add_pulse.to_uppercase();
+    let text_w = widgets::text_width(painter, &label, font.clone(), 0.5);
     // padding 12 | plus 12 | gap 6 | text | padding 12
     let w = 12.0 + 12.0 + 6.0 + text_w + 12.0;
     let r = Rect::from_min_max(pos2(rect.right() - w, rect.top()), rect.right_bottom());
@@ -237,7 +238,7 @@ fn pulses_header(ui: &Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiA
         ui,
         r,
         ui.make_persistent_id("add-pulse"),
-        "Adicionar pulso",
+        &m.add_pulse,
         enabled,
     );
     let fill = if resp.hovered() {
@@ -262,7 +263,7 @@ fn pulses_header(ui: &Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiA
         painter,
         pos2(r.left() + 30.0, r.center().y),
         Align2::LEFT_CENTER,
-        label,
+        &label,
         font,
         color,
         0.5,
@@ -280,7 +281,8 @@ pub(super) fn play_button(
     wide: bool,
     actions: &mut Vec<UiAction>,
 ) {
-    let label = if state.playing { "Stop" } else { "Play" };
+    let m = &state.messages;
+    let label = if state.playing { &m.stop } else { &m.play };
     let resp = widgets::button(ui, rect, ui.make_persistent_id("play"), label, true);
     let shape = if resp.is_pointer_button_down_on() {
         rect.shrink2(rect.size() * 0.025)
@@ -297,7 +299,7 @@ pub(super) fn play_button(
             Stroke::new(1.0, theme::with_alpha(theme::ACCENT, 0.3)),
             StrokeKind::Inside,
         );
-        (theme::ACCENT, "STOP")
+        (theme::ACCENT, m.stop.to_uppercase())
     } else {
         let glow = if resp.hovered() { 0.3 } else { 0.2 };
         painter.add(
@@ -310,10 +312,10 @@ pub(super) fn play_button(
             .as_shape(shape, radius),
         );
         painter.rect_filled(shape, radius, theme::ACCENT);
-        (Color32::WHITE, "PLAY")
+        (Color32::WHITE, m.play.to_uppercase())
     };
     let font = theme::font_bold(if wide { 20.0 } else { 18.0 });
-    let text_w = widgets::text_width(painter, text, font.clone(), 1.0);
+    let text_w = widgets::text_width(painter, &text, font.clone(), 1.0);
     let icon = 22.0;
     let x = shape.center().x - (icon + 14.0 + text_w) / 2.0;
     let c = pos2(x + icon / 2.0, shape.center().y);
@@ -326,7 +328,7 @@ pub(super) fn play_button(
         painter,
         pos2(x + icon + 14.0, shape.center().y),
         Align2::LEFT_CENTER,
-        text,
+        &text,
         font,
         fg,
         1.0,

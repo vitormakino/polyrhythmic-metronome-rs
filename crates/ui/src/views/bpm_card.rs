@@ -39,13 +39,19 @@ pub(crate) fn bpm_card(
         &painter,
         pos2(inner.left(), header_y),
         Align2::LEFT_CENTER,
-        "TEMPO / BPM",
+        &state.messages.tempo_heading,
         theme::font_mono(11.0),
         theme::TEXT_MUTED,
         2.0,
     );
     let tap_rect = Rect::from_center_size(pos2(inner.right() - 24.0, header_y), vec2(48.0, 22.0));
-    let tap = widgets::button(ui, tap_rect, ui.make_persistent_id("tap"), "Tap", true);
+    let tap = widgets::button(
+        ui,
+        tap_rect,
+        ui.make_persistent_id("tap"),
+        &state.messages.tap,
+        true,
+    );
     let tap_shape = if tap.is_pointer_button_down_on() {
         tap_rect.shrink(1.0)
     } else {
@@ -62,7 +68,7 @@ pub(crate) fn bpm_card(
         &painter,
         tap_shape.center(),
         Align2::CENTER_CENTER,
-        "TAP",
+        &state.messages.tap.to_uppercase(),
         theme::font_mono_medium(10.0),
         theme::with_alpha(theme::ACCENT, if tap.hovered() { 1.0 } else { 0.8 }),
         1.0,
@@ -78,7 +84,7 @@ pub(crate) fn bpm_card(
         ui,
         pin_rect,
         ui.make_persistent_id("mini"),
-        "Fixar mini",
+        &state.messages.pin_mini,
         true,
     );
     if pin.hovered() {
@@ -122,7 +128,7 @@ pub(crate) fn bpm_card(
     let changed = ui
         .scope_builder(UiBuilder::new().max_rect(slider_rect), |ui| {
             style_slider(ui, slider_rect.width());
-            ui.name_inputs("BPM", |ui| {
+            ui.name_inputs(&state.messages.bpm, |ui| {
                 ui.add(
                     Slider::new(&mut value, i32::from(Bpm::MIN)..=i32::from(Bpm::MAX))
                         .show_value(false)
@@ -150,6 +156,7 @@ pub(super) fn bpm_stepper(
     actions: &mut Vec<UiAction>,
 ) -> Rect {
     let painter = ui.painter().clone();
+    let m = state.messages.clone();
     let digits = widgets::text_width(&painter, "300", font.clone(), -2.0);
     widgets::text(
         &painter,
@@ -163,10 +170,16 @@ pub(super) fn bpm_stepper(
     let gap = (step * 0.5).min(24.0);
     let offset = digits / 2.0 + gap + step / 2.0;
     let icon = (step * 0.6).min(24.0);
-    for (label, delta) in [("Diminuir BPM", -1), ("Aumentar BPM", 1)] {
+    for (label, delta) in [(&m.bpm_decrease, -1), (&m.bpm_increase, 1)] {
         let c = center + vec2(offset * delta as f32, 0.0);
         let r = Rect::from_center_size(c, Vec2::splat(step));
-        let resp = widgets::button(ui, r, ui.make_persistent_id(label), label, true);
+        let resp = widgets::button(
+            ui,
+            r,
+            ui.make_persistent_id(("bpm-step", delta)),
+            label,
+            true,
+        );
         if resp.hovered() {
             painter.circle_filled(c, step / 2.0, theme::BORDER);
         }
@@ -208,7 +221,7 @@ pub(super) fn bpm_gestures(
 ) {
     let id = ui.make_persistent_id("bpm-gestures");
     let resp = ui.interact(rect, id, Sense::click_and_drag());
-    resp.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, "BPM"));
+    resp.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, &state.messages.bpm));
     let resp = resp.on_hover_cursor(egui::CursorIcon::ResizeVertical);
 
     let scroll = if resp.hovered() {

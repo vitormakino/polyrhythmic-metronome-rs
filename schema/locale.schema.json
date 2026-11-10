@@ -1,0 +1,160 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "active_pulses": {
+      "description": "ACTIVE PULSES",
+      "type": "string"
+    },
+    "add_pulse": {
+      "description": "Add pulse",
+      "type": "string"
+    },
+    "app_heading": {
+      "description": "POLYRHYTHMIC METRONOME",
+      "type": "string"
+    },
+    "bpm": {
+      "description": "BPM",
+      "type": "string"
+    },
+    "bpm_decrease": {
+      "description": "Decrease BPM",
+      "type": "string"
+    },
+    "bpm_increase": {
+      "description": "Increase BPM",
+      "type": "string"
+    },
+    "coincidence": {
+      "description": "COINCIDENCE",
+      "type": "string"
+    },
+    "engine": {
+      "description": "ENGINE",
+      "type": "string"
+    },
+    "expand": {
+      "description": "Expand",
+      "type": "string"
+    },
+    "no_output": {
+      "description": "no audio output",
+      "type": "string"
+    },
+    "pin_mini": {
+      "description": "Pin mini",
+      "type": "string"
+    },
+    "play": {
+      "description": "Play",
+      "type": "string"
+    },
+    "pulse": {
+      "description": "Pulse {n}",
+      "type": "string"
+    },
+    "pulse_beat": {
+      "description": "beat {n}",
+      "type": "string"
+    },
+    "pulse_fewer_beats": {
+      "description": "fewer beats",
+      "type": "string"
+    },
+    "pulse_more_beats": {
+      "description": "more beats",
+      "type": "string"
+    },
+    "pulse_move": {
+      "description": "move",
+      "type": "string"
+    },
+    "pulse_mute": {
+      "description": "mute",
+      "type": "string"
+    },
+    "pulse_remove": {
+      "description": "remove",
+      "type": "string"
+    },
+    "pulse_settings": {
+      "description": "settings",
+      "type": "string"
+    },
+    "pulse_sound": {
+      "description": "sound {name}",
+      "type": "string"
+    },
+    "settings": {
+      "description": "Settings",
+      "type": "string"
+    },
+    "sound_bell": {
+      "description": "Bell",
+      "type": "string"
+    },
+    "sound_electronic": {
+      "description": "Electronic",
+      "type": "string"
+    },
+    "sound_heading": {
+      "description": "SOUND",
+      "type": "string"
+    },
+    "sound_sine": {
+      "description": "Sine",
+      "type": "string"
+    },
+    "sound_wood": {
+      "description": "Wood",
+      "type": "string"
+    },
+    "stop": {
+      "description": "Stop",
+      "type": "string"
+    },
+    "tap": {
+      "description": "Tap",
+      "type": "string"
+    },
+    "tempo_heading": {
+      "description": "TEMPO / BPM",
+      "type": "string"
+    },
+    "topology": {
+      "description": "Rhythmic topology",
+      "type": "string"
+    },
+    "tray_bpm_down": {
+      "description": "BPM −1",
+      "type": "string"
+    },
+    "tray_bpm_up": {
+      "description": "BPM +1",
+      "type": "string"
+    },
+    "tray_mini": {
+      "description": "Mini",
+      "type": "string"
+    },
+    "tray_open": {
+      "description": "Open window",
+      "type": "string"
+    },
+    "tray_quit": {
+      "description": "Quit",
+      "type": "string"
+    },
+    "underruns": {
+      "description": "Audio dropouts: {n}",
+      "type": "string"
+    },
+    "visual_offset": {
+      "description": "Visual offset (ms)",
+      "type": "string"
+    }
+  },
+  "title": "Polyrhythmic Metronome locale",
+  "type": "object"
+}

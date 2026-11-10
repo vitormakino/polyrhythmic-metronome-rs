@@ -361,3 +361,45 @@ With the app playing (`cargo run --release -p polyrhythmic-metronome-app`):
    old flashes; no crash.
 
 Record the result here: date, macOS version, outputs used, what differed.
+
+## Language configuration
+
+### Editor autocomplete, live language switch, broken files
+
+Status: PASS for steps 1 (config.toml), 2 (switching) and 4; step 3 partly
+(2026-11-10, owner's Mac):
+
+- Step 1: in Zed, `config.toml` autocompletes. `locales/de.toml` not tried.
+- Step 2: owner switched `en` ⇄ `pt-BR` while playing. The window and the
+  menu bar item changed language and the sound did not stop or glitch.
+  Deleting `config.toml` not tried by hand (covered by a unit test).
+- Step 3: the agent saved `language = "pt-BR` (unterminated string) and
+  `language = 3`. The app kept the last valid language and printed the file,
+  the line and the problem each time. `"../x"` and a broken `locales/de.toml`
+  not tried by hand (covered by unit tests).
+- Step 4: the agent saved by writing a temp file and renaming it over
+  `config.toml`; every save was picked up.
+- Note: while the window is fully covered by other windows, macOS reports it
+  as occluded and the app does not redraw, so the new language shows up when
+  the window becomes visible again. The reload itself happens at once.
+
+With the app running (`cargo run --release -p polyrhythmic-metronome-app`) and
+`~/.config/polyrhythmic-metronome/` created on the first run:
+
+1. Open `config.toml` and a new `locales/de.toml` (first line
+   `#:schema ../schema/locale.schema.json`) in an editor with the Taplo
+   language server. Expected: `language` and the message keys autocomplete, and
+   an unknown key or a non-string value is flagged.
+2. Start playing, then edit `config.toml` to `language = "pt-BR"` and save.
+   Expected: the window and the menu bar item change language within about a
+   second, the app keeps playing, and the clicks have no gap or glitch (no new
+   underruns in the footer). Switch back to `"en"` and delete `config.toml`:
+   both return to English.
+3. Save `config.toml` with a syntax error (`language = "pt-BR`), then with
+   `language = "../x"`, then `locales/de.toml` with a syntax error while
+   `language = "de"`. Expected: the app keeps the last valid text and keeps
+   playing; stderr names the file, the line and the problem each time.
+4. Save with an editor that replaces the file (write a temp file and rename,
+   or delete and recreate). Expected: still picked up.
+
+Record the result here: date, macOS version, editor, what differed.

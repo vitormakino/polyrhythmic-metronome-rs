@@ -12,8 +12,6 @@ fixed anchor, and the audio callback never allocates, locks or does I/O.
 This is the native port of the web app:
 <https://vitormakino.github.io/advanced-polyrhythmic-metronome/>
 
-The interface is in Portuguese, like the labels quoted below.
-
 ## Requirements
 
 - macOS 11 or later, Apple Silicon or Intel.
@@ -47,17 +45,17 @@ notarization or App Store build.
 - **Tempo:** −/+ buttons, the slider, or **TAP**. The first pulse in the list
   defines the measure: its beats fill one measure at the chosen BPM, and every
   other pulse divides that same measure evenly.
-- **Pulses:** "Adicionar pulso" adds one; each card changes its beat count,
+- **Pulses:** "Add pulse" adds one; each card changes its beat count,
   mutes it, removes it, or is dragged to reorder. The settings button on a card
   opens per-beat intensities (click a bar to cycle mute → soft → medium → hard)
   and the sound (Sine, Wood, Bell, Electronic).
 - **Edits while playing:** tempo, sound and intensity changes apply at once.
   Changes to the first pulse (its beat count, reordering, removing it) and new
   pulses start at the next "one".
-- **Mini window:** the pin button ("Fixar mini") shrinks the app to a small
+- **Mini window:** the pin button ("Pin mini") shrinks the app to a small
   window that stays on top of other apps, with the rhythm topology, BPM and
-  Play/Stop. "Expandir" goes back to the full window.
-- **Visual offset:** "Configurações" in the footer has "Offset visual (ms)", a
+  Play/Stop. "Expand" goes back to the full window.
+- **Visual offset:** "Settings" in the footer has "Visual offset (ms)", a
   per-device delay for the flashes so they match what you hear (useful with
   Bluetooth headphones).
 - **Device changes:** the app follows the macOS default output. Plugging or
@@ -78,9 +76,40 @@ If another app or macOS already holds one of them, the terminal prints
 also the macOS shortcut for "Select next source in Input menu" when more than
 one keyboard input source is enabled.
 
-The menu bar item offers Play/Stop, BPM +1, BPM −1, "Abrir janela", "Mini" and
-"Sair". Closing the window leaves the metronome playing; reopen it from the
-menu bar item (or with Ctrl+Option+M). Quit with "Sair" or ⌘Q.
+The menu bar item offers Play/Stop, BPM +1, BPM −1, "Open window", "Mini" and
+"Quit". Closing the window leaves the metronome playing; reopen it from the
+menu bar item (or with Ctrl+Option+M). Quit with "Quit" or ⌘Q.
+
+## Configuration
+
+The app keeps its files in `~/.config/polyrhythmic-metronome/` (or
+`$XDG_CONFIG_HOME/polyrhythmic-metronome/` when that is set to an absolute
+path), also on macOS. On the first run it creates `config.toml` there and never
+rewrites it afterwards.
+
+```toml
+language = "en"   # "en", "pt-BR", or the code of a file in locales/
+```
+
+The interface is in English by default; `pt-BR` is built in. Saving
+`config.toml` applies a new language at once, in the window and in the menu
+bar, without restarting and without touching the audio. A file with an error
+never stops the app: it keeps the last valid state and prints the file, line
+and problem on stderr.
+
+To translate, or to reword a built-in language, create
+`locales/<code>.toml` (for example `locales/de.toml` plus `language = "de"`).
+Start it with the directive `#:schema ../schema/locale.schema.json` and
+override only the keys you want; the rest comes from the built-in language
+(English for a code that is not built in). Keep the `{name}` placeholders of
+the English text.
+
+The app writes JSON Schemas to `schema/` (only when their content changes) and
+the files point to them with `#:schema` directives. Autocomplete and
+validation need an editor with the Taplo TOML language server (Even Better
+TOML in VS Code, Helix, Neovim with `taplo`). To check that Taplo is active, type
+`lang` in `config.toml`: `language` should complete, and `language = "de/x"`
+should be underlined.
 
 ## Project layout
 
@@ -107,6 +136,10 @@ compare snapshot images in `crates/ui/tests/snapshots/`. After an intended
 visual change, regenerate them with `UPDATE_SNAPSHOTS=1 cargo test -p
 polyrhythmic-metronome-ui` and look at the new PNGs before committing. Without
 a GPU adapter the snapshot tests are skipped with a notice.
+
+The JSON Schemas in `schema/` are generated from the code; after changing the
+config or the messages, regenerate them with `UPDATE_SCHEMAS=1 cargo test -p
+polyrhythmic-metronome-app`.
 
 ## Verification
 

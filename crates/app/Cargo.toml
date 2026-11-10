@@ -21,7 +21,11 @@ polyrhythmic-metronome-ui = { path = "../ui" }
 eframe.workspace = true
 serde.workspace = true
 toml.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
 dirs.workspace = true
 tray-icon.workspace = true
 global-hotkey.workspace = true
+notify.workspace = true
+notify-debouncer-mini.workspace = true
 assert_no_alloc.workspace = true

@@ -1,0 +1,8 @@
+#:schema ./schema/config.schema.json
+# Polyrhythmic Metronome configuration. The app reads this file and applies
+# changes as soon as you save; it never writes to it again.
+
+# Interface language: "en" (default), "pt-BR", or the code of a file you put in
+# locales/ (for example locales/de.toml, starting with
+# #:schema ../schema/locale.schema.json).
+language = "en"

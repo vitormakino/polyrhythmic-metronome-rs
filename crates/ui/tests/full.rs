@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::Vec2;
@@ -5,6 +6,7 @@ use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use egui_kittest::{Harness, SnapshotOptions, wgpu::WgpuTestRenderer};
 use pm_audio::BeatEvent;
 use pm_core::{Intensity, MAX_PULSES, Pattern, SoundType};
+use pm_ui::i18n::Messages;
 use pm_ui::state::{PENDING_BEATS_CAP, UiAction, UiState};
 use pm_ui::theme;
 use pm_ui::views::full::full_view;
@@ -12,6 +14,12 @@ use pm_ui::views::full::full_view;
 const MIN: Vec2 = Vec2::new(420.0, 640.0);
 const MEDIUM: Vec2 = Vec2::new(900.0, 700.0);
 const LARGE: Vec2 = Vec2::new(1400.0, 900.0);
+
+/// The v1 snapshots are Brazilian Portuguese; they must not change.
+fn pt_br(mut state: UiState) -> UiState {
+    state.messages = Arc::new(Messages::builtin("pt-BR").expect("pt-BR is embedded"));
+    state
+}
 
 struct App {
     ui: UiState,
@@ -66,10 +74,10 @@ fn click(harness: &mut Harness<'static, App>, label: &str) {
 #[test]
 fn bpm_buttons_and_slider() {
     let mut h = harness(MEDIUM, UiState::default());
-    click(&mut h, "Aumentar BPM");
+    click(&mut h, "Increase BPM");
     assert_eq!(h.state().ui.bpm.get(), 121);
-    click(&mut h, "Diminuir BPM");
-    click(&mut h, "Diminuir BPM");
+    click(&mut h, "Decrease BPM");
+    click(&mut h, "Decrease BPM");
     assert_eq!(h.state().ui.bpm.get(), 119);
     assert!(
         h.state()
@@ -91,7 +99,7 @@ fn bpm_stays_in_range() {
     let mut state = UiState::default();
     state.bpm = pm_core::Bpm::new(300);
     let mut h = harness(MEDIUM, state);
-    click(&mut h, "Aumentar BPM");
+    click(&mut h, "Increase BPM");
     assert_eq!(h.state().ui.bpm.get(), 300);
 }
 
@@ -120,19 +128,19 @@ fn tap_sets_bpm() {
 #[test]
 fn add_and_remove_pulse() {
     let mut h = harness(MEDIUM, UiState::default());
-    click(&mut h, "Adicionar pulso");
+    click(&mut h, "Add pulse");
     assert_eq!(h.state().ui.pattern.pulses.len(), 3);
     assert!(h.state().actions.contains(&UiAction::PatternChanged));
-    click(&mut h, "Pulso 3: remover");
+    click(&mut h, "Pulse 3: remove");
     assert_eq!(h.state().ui.pattern.pulses.len(), 2);
-    click(&mut h, "Pulso 2: remover");
+    click(&mut h, "Pulse 2: remove");
     assert_eq!(h.state().ui.pattern.pulses.len(), 1);
     assert!(
-        h.get_by_label("Pulso 1: remover")
+        h.get_by_label("Pulse 1: remove")
             .accesskit_node()
             .is_disabled()
     );
-    click(&mut h, "Pulso 1: remover");
+    click(&mut h, "Pulse 1: remove");
     assert_eq!(h.state().ui.pattern.pulses.len(), 1);
 }
 
@@ -142,28 +150,24 @@ fn add_pulse_disabled_at_cap() {
     while state.pattern.add_pulse().is_some() {}
     assert_eq!(state.pattern.pulses.len(), MAX_PULSES);
     let mut h = harness(MEDIUM, state);
-    assert!(
-        h.get_by_label("Adicionar pulso")
-            .accesskit_node()
-            .is_disabled()
-    );
-    click(&mut h, "Adicionar pulso");
+    assert!(h.get_by_label("Add pulse").accesskit_node().is_disabled());
+    click(&mut h, "Add pulse");
     assert_eq!(h.state().ui.pattern.pulses.len(), MAX_PULSES);
 }
 
 #[test]
 fn beats_mute_and_sound() {
     let mut h = harness(MEDIUM, UiState::default());
-    click(&mut h, "Pulso 1: aumentar batidas");
+    click(&mut h, "Pulse 1: more beats");
     assert_eq!(h.state().ui.pattern.pulses[0].beats, 5);
-    click(&mut h, "Pulso 2: diminuir batidas");
+    click(&mut h, "Pulse 2: fewer beats");
     assert_eq!(h.state().ui.pattern.pulses[1].beats, 2);
-    click(&mut h, "Pulso 2: silenciar");
+    click(&mut h, "Pulse 2: mute");
     assert!(!h.state().ui.pattern.pulses[1].enabled);
-    click(&mut h, "Pulso 2: silenciar");
+    click(&mut h, "Pulse 2: mute");
     assert!(h.state().ui.pattern.pulses[1].enabled);
-    click(&mut h, "Pulso 1: ajustes");
-    click(&mut h, "Pulso 1: som Bell");
+    click(&mut h, "Pulse 1: settings");
+    click(&mut h, "Pulse 1: sound Bell");
     assert_eq!(h.state().ui.pattern.pulses[0].sound, SoundType::Bell);
     let changes = h
         .state()
@@ -177,18 +181,18 @@ fn beats_mute_and_sound() {
 #[test]
 fn intensity_cycles() {
     let mut h = harness(MEDIUM, UiState::default());
-    assert!(h.query_by_label("Pulso 1: batida 2").is_none());
-    click(&mut h, "Pulso 1: ajustes");
+    assert!(h.query_by_label("Pulse 1: beat 2").is_none());
+    click(&mut h, "Pulse 1: settings");
     assert_eq!(
         h.state().ui.pattern.pulses[0].intensities[1],
         Intensity::Medium
     );
-    click(&mut h, "Pulso 1: batida 2");
+    click(&mut h, "Pulse 1: beat 2");
     assert_eq!(
         h.state().ui.pattern.pulses[0].intensities[1],
         Intensity::Hard
     );
-    click(&mut h, "Pulso 1: batida 2");
+    click(&mut h, "Pulse 1: beat 2");
     assert_eq!(
         h.state().ui.pattern.pulses[0].intensities[1],
         Intensity::Mute
@@ -208,7 +212,7 @@ fn play_emits_action() {
 #[test]
 fn pin_mini_emits_action() {
     let mut h = harness(MEDIUM, UiState::default());
-    click(&mut h, "Fixar mini");
+    click(&mut h, "Pin mini");
     assert!(h.state().actions.contains(&UiAction::ToggleMini));
 }
 
@@ -216,8 +220,8 @@ fn pin_mini_emits_action() {
 fn drag_reorders_pulses() {
     let mut h = harness(MEDIUM, UiState::default());
     let first = h.state().ui.pattern.pulses[0].id;
-    let from = h.get_by_label("Pulso 1: mover").rect().center();
-    let to = h.get_by_label("Pulso 2").rect().center();
+    let from = h.get_by_label("Pulse 1: move").rect().center();
+    let to = h.get_by_label("Pulse 2").rect().center();
     h.hover_at(from);
     h.run();
     h.drag_at(from);
@@ -294,16 +298,16 @@ fn settings_does_not_stretch_neighbors() {
     let mut state = UiState::default();
     state.pattern.add_pulse();
     let mut h = harness(MEDIUM, state);
-    let one = h.get_by_label("Pulso 1").rect();
-    let two = h.get_by_label("Pulso 2").rect();
-    let three = h.get_by_label("Pulso 3").rect();
+    let one = h.get_by_label("Pulse 1").rect();
+    let two = h.get_by_label("Pulse 2").rect();
+    let three = h.get_by_label("Pulse 3").rect();
     assert!(
         (one.top() - two.top()).abs() < 0.5 && (two.top() - three.top()).abs() < 0.5,
         "3 pulses must share a row: {one:?} {two:?} {three:?}"
     );
-    click(&mut h, "Pulso 1: ajustes");
-    let one_open = h.get_by_label("Pulso 1").rect();
-    let two_after = h.get_by_label("Pulso 2").rect();
+    click(&mut h, "Pulse 1: settings");
+    let one_open = h.get_by_label("Pulse 1").rect();
+    let two_after = h.get_by_label("Pulse 2").rect();
     assert!(
         one_open.height() > one.height() + 20.0,
         "settings did not open"
@@ -315,16 +319,16 @@ fn settings_does_not_stretch_neighbors() {
 #[test]
 fn no_overlap_at_minimum_size() {
     let mut h = harness(MIN, many());
-    click(&mut h, "Pulso 1: ajustes");
+    click(&mut h, "Pulse 1: settings");
     let labels = [
         "BPM",
         "Tap",
-        "Adicionar pulso",
+        "Add pulse",
         "Play",
-        "Fixar mini",
-        "Topologia rítmica",
-        "Configurações",
-        "sem saída de áudio",
+        "Pin mini",
+        "Rhythmic topology",
+        "Settings",
+        "no audio output",
     ];
     let rects: Vec<_> = labels
         .iter()
@@ -342,9 +346,9 @@ fn no_overlap_at_minimum_size() {
 #[test]
 fn footer_shows_output_state_and_underruns() {
     let mut h = harness(MIN, UiState::default());
-    assert!(h.query_by_label("sem saída de áudio").is_some());
+    assert!(h.query_by_label("no audio output").is_some());
     assert!(
-        h.query_by_label_contains("Falhas de áudio").is_none(),
+        h.query_by_label_contains("Audio dropouts").is_none(),
         "hidden while there are none"
     );
 
@@ -352,8 +356,8 @@ fn footer_shows_output_state_and_underruns() {
     state.device_name = Some("USB Audio Interface".to_owned());
     state.underruns = 3;
     h = harness(MIN, state);
-    assert!(h.query_by_label("sem saída de áudio").is_none());
-    assert!(h.query_by_label("Falhas de áudio: 3").is_some());
+    assert!(h.query_by_label("no audio output").is_none());
+    assert!(h.query_by_label("Audio dropouts: 3").is_some());
 }
 
 #[test]
@@ -362,7 +366,7 @@ fn no_output_shows_the_open_error_on_hover() {
     state.audio_error = Some("audio output: device busy".to_owned());
     let mut h = harness(MIN, state);
     assert!(h.query_by_label_contains("device busy").is_none());
-    h.get_by_label("sem saída de áudio").hover();
+    h.get_by_label("no audio output").hover();
     for _ in 0..30 {
         h.step();
     }
@@ -373,11 +377,11 @@ fn no_output_shows_the_open_error_on_hover() {
 fn settings_popover_sets_visual_offset() {
     let mut h = harness(MEDIUM, UiState::default());
     assert!(
-        h.query_by_label("Offset visual (ms)").is_none(),
+        h.query_by_label("Visual offset (ms)").is_none(),
         "closed at first"
     );
-    click(&mut h, "Configurações");
-    h.get_by_label("Offset visual (ms)")
+    click(&mut h, "Settings");
+    h.get_by_label("Visual offset (ms)")
         .set_value_accesskit(37.0);
     h.run();
     assert_eq!(h.state().ui.visual_offset, Duration::from_millis(37));
@@ -386,13 +390,13 @@ fn settings_popover_sets_visual_offset() {
         Some(&UiAction::SetVisualOffset(Duration::from_millis(37)))
     );
     // Clamped to the slider's range.
-    h.get_by_label("Offset visual (ms)")
+    h.get_by_label("Visual offset (ms)")
         .set_value_accesskit(9000.0);
     h.run();
     assert_eq!(h.state().ui.visual_offset, Duration::from_millis(500));
     // The gear closes it again.
-    click(&mut h, "Configurações");
-    assert!(h.query_by_label("Offset visual (ms)").is_none());
+    click(&mut h, "Settings");
+    assert!(h.query_by_label("Visual offset (ms)").is_none());
 }
 
 /// 6 pulses of 17, 23, 4, 5, 6, 32 beats.
@@ -419,6 +423,10 @@ fn renderer() -> Option<WgpuTestRenderer> {
 }
 
 fn snapshot(name: &str, size: Vec2, many_pulses: bool) {
+    snapshot_in(name, size, many_pulses, true);
+}
+
+fn snapshot_in(name: &str, size: Vec2, many_pulses: bool, portuguese: bool) {
     let Some(renderer) = renderer() else {
         eprintln!("SKIPPED {name}: no wgpu adapter available");
         return;
@@ -428,9 +436,15 @@ fn snapshot(name: &str, size: Vec2, many_pulses: bool) {
     } else {
         UiState::default()
     };
+    let state = if portuguese { pt_br(state) } else { state };
     let mut h = harness_with(size, state, Some(renderer));
     if many_pulses {
-        click(&mut h, "Pulso 1: ajustes");
+        let settings = if portuguese {
+            "Pulso 1: ajustes"
+        } else {
+            "Pulse 1: settings"
+        };
+        click(&mut h, settings);
     }
     h.remove_cursor();
     h.run();
@@ -468,4 +482,25 @@ fn full_large_default() {
 #[test]
 fn full_large_many() {
     snapshot("full_large_many", LARGE, true);
+}
+
+#[test]
+fn switching_the_language_relabels_the_view() {
+    let mut h = harness(MEDIUM, UiState::default());
+    h.get_by_label("Add pulse");
+    h.state_mut().actions.clear();
+    h.state_mut().ui.messages = Arc::new(Messages::builtin("pt-BR").unwrap());
+    h.run();
+    assert!(
+        h.state().actions.is_empty(),
+        "a language switch emits no UiAction"
+    );
+    assert!(h.query_by_label("Add pulse").is_none());
+    h.get_by_label("Adicionar pulso");
+    h.get_by_label("Pulso 1: remover");
+}
+
+#[test]
+fn english_snapshot_full() {
+    snapshot_in("full_medium_default_en", MEDIUM, false, false);
 }
