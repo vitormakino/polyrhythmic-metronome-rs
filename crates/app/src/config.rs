@@ -4,9 +4,6 @@
 //! The app creates `config.toml` once and never writes to it again; only
 //! `schema/` is rewritten, and only when its content differs.
 
-// Wired into startup by the next task; remove then.
-#![allow(dead_code)]
-
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};

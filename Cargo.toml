@@ -28,6 +28,8 @@ schemars = "1.2.3"
 dirs = "7.0.0"
 tray-icon = { version = "0.26.1", default-features = false }
 global-hotkey = "0.9.0"
+notify = "8.2"
+notify-debouncer-mini = "0.7.0"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

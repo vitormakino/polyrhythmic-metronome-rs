@@ -361,3 +361,30 @@ With the app playing (`cargo run --release -p polyrhythmic-metronome-app`):
    old flashes; no crash.
 
 Record the result here: date, macOS version, outputs used, what differed.
+
+## Language configuration
+
+### Editor autocomplete, live language switch, broken files
+
+Status: PENDING (owner). The agent cannot drive an editor or click in the app.
+
+With the app running (`cargo run --release -p polyrhythmic-metronome-app`) and
+`~/.config/polyrhythmic-metronome/` created on the first run:
+
+1. Open `config.toml` and a new `locales/de.toml` (first line
+   `#:schema ../schema/locale.schema.json`) in an editor with the Taplo
+   language server. Expected: `language` and the message keys autocomplete, and
+   an unknown key or a non-string value is flagged.
+2. Start playing, then edit `config.toml` to `language = "pt-BR"` and save.
+   Expected: the window and the menu bar item change language within about a
+   second, the app keeps playing, and the clicks have no gap or glitch (no new
+   underruns in the footer). Switch back to `"en"` and delete `config.toml`:
+   both return to English.
+3. Save `config.toml` with a syntax error (`language = "pt-BR`), then with
+   `language = "../x"`, then `locales/de.toml` with a syntax error while
+   `language = "de"`. Expected: the app keeps the last valid text and keeps
+   playing; stderr names the file, the line and the problem each time.
+4. Save with an editor that replaces the file (write a temp file and rename,
+   or delete and recreate). Expected: still picked up.
+
+Record the result here: date, macOS version, editor, what differed.

@@ -26,4 +26,6 @@ schemars.workspace = true
 dirs.workspace = true
 tray-icon.workspace = true
 global-hotkey.workspace = true
+notify.workspace = true
+notify-debouncer-mini.workspace = true
 assert_no_alloc.workspace = true

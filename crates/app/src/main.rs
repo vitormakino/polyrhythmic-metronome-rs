@@ -14,6 +14,7 @@
 //! so they work while the window is hidden.
 
 mod config;
+mod config_watch;
 mod controller;
 mod hotkeys;
 mod remote;
@@ -29,6 +30,8 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Sense, ViewportCommand};
 use pm_audio::{AudioService, DeviceInfo, EngineInit};
+use pm_ui::i18n::Messages;
+use std::sync::Arc;
 
 // Debug builds abort on an allocation inside the audio callback (the
 // `assert_no_alloc` guard in `pm_audio`'s data callback); release builds use
@@ -78,18 +81,27 @@ struct App {
     _hotkeys: Option<global_hotkey::GlobalHotKeyManager>,
     remote_tx: Sender<Remote>,
     remote_rx: Receiver<Remote>,
+    /// New messages from the config watcher (the language changed).
+    config_rx: Receiver<Arc<Messages>>,
     /// "Sair" was chosen: let the next close request through.
     quitting: bool,
 }
 
 impl App {
-    fn new(audio: AudioService, settings: Settings, settings_dir: Option<PathBuf>) -> App {
+    fn new(
+        audio: AudioService,
+        settings: Settings,
+        settings_dir: Option<PathBuf>,
+        messages: Arc<Messages>,
+        config_rx: Receiver<Arc<Messages>>,
+    ) -> App {
         let now = Instant::now();
         let (remote_tx, remote_rx) = mpsc::channel();
         let mut ui = UiState::default();
         ui.pattern = settings.pattern.clone();
         ui.bpm = settings.bpm;
         ui.mode = settings.mode;
+        ui.messages = messages;
         let mut app = App {
             audio,
             ctl: Controller::new(ui),
@@ -107,6 +119,7 @@ impl App {
             _hotkeys: None,
             remote_tx,
             remote_rx,
+            config_rx,
             quitting: false,
         };
         app.sync_device();
@@ -177,7 +190,7 @@ impl App {
     fn start_remotes(&mut self, ctx: &egui::Context) {
         tray::forward(self.remote_tx.clone(), ctx.clone());
         hotkeys::forward(self.remote_tx.clone(), ctx.clone());
-        match Tray::build(self.ctl.ui.playing) {
+        match Tray::build(self.ctl.ui.playing, &self.ctl.ui.messages) {
             Ok(tray) => self.tray = Some(tray),
             Err(e) => eprintln!("polyrhythmic-metronome: no menu bar item: {e}"),
         }
@@ -269,8 +282,15 @@ impl eframe::App for App {
             self.remote(ctx, remote, now);
         }
         self.ctl.flush(&mut self.audio);
+        // Only the latest language matters; no audio command is involved.
+        if let Some(messages) = self.config_rx.try_iter().last() {
+            self.ctl.ui.messages = messages;
+            if let Some(tray) = &mut self.tray {
+                tray.set_messages(&self.ctl.ui.messages);
+            }
+        }
         if let Some(tray) = &mut self.tray {
-            tray.set_playing(self.ctl.ui.playing);
+            tray.set_playing(self.ctl.ui.playing, &self.ctl.ui.messages);
         }
 
         if !self.quitting && ctx.input(|i| i.viewport().close_requested()) {
@@ -362,12 +382,31 @@ fn spawn_ticker(ctx: egui::Context) {
     }
 }
 
+/// Creates the config folder's files and loads the language, before the
+/// window opens. Any problem goes to stderr and the app runs in English.
+fn load_config() -> (config_watch::Loader, Option<PathBuf>) {
+    let mut loader = config_watch::Loader::default();
+    let Some(dir) = config::config_dir() else {
+        eprintln!("polyrhythmic-metronome: no home folder, using the English interface");
+        return (loader, None);
+    };
+    if let Err(e) = config::ensure_files(&dir) {
+        eprintln!("polyrhythmic-metronome: {}: {e}", dir.display());
+    }
+    let reload = loader.reload(&|p| std::fs::read_to_string(p), &dir);
+    for line in &reload.diagnostics {
+        eprintln!("polyrhythmic-metronome: {line}");
+    }
+    (loader, Some(dir))
+}
+
 fn main() -> eframe::Result {
     let settings_dir = settings::default_dir();
     let settings = settings_dir
         .as_deref()
         .map(Settings::load)
         .unwrap_or_default();
+    let (loader, config_dir) = load_config();
     let audio = match AudioService::start(EngineInit {
         pattern: settings.pattern.clone(),
         bpm: settings.bpm,
@@ -390,7 +429,18 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             theme::install(&cc.egui_ctx);
             spawn_ticker(cc.egui_ctx.clone());
-            Ok(Box::new(App::new(audio, settings, settings_dir)))
+            let (config_tx, config_rx) = mpsc::channel();
+            let messages = loader.messages.clone();
+            if let Some(dir) = config_dir {
+                config_watch::spawn(dir, loader, config_tx, cc.egui_ctx.clone());
+            }
+            Ok(Box::new(App::new(
+                audio,
+                settings,
+                settings_dir,
+                messages,
+                config_rx,
+            )))
         }),
     )
 }

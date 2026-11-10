@@ -12,6 +12,7 @@ use eframe::egui;
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+use pm_ui::i18n::Messages;
 use pm_ui::state::WindowMode;
 
 use crate::remote::Remote;
@@ -40,31 +41,45 @@ pub fn map_menu(id: &MenuId) -> Option<Remote> {
 }
 
 /// The transport item's text for the current state.
-pub fn play_label(playing: bool) -> &'static str {
-    if playing { "Stop" } else { "Play" }
+pub fn play_label(playing: bool, m: &Messages) -> &str {
+    if playing { &m.stop } else { &m.play }
 }
 
 /// The menu bar item and the parts of it that change.
 pub struct Tray {
     _icon: TrayIcon,
     play: MenuItem,
+    bpm_up: MenuItem,
+    bpm_down: MenuItem,
+    open: MenuItem,
+    mini: MenuItem,
+    quit: MenuItem,
     playing: bool,
 }
 
 impl Tray {
-    pub fn build(playing: bool) -> Result<Tray, Box<dyn Error>> {
-        let play = MenuItem::with_id(PLAY, play_label(playing), true, None);
+    pub fn build(playing: bool, m: &Messages) -> Result<Tray, Box<dyn Error>> {
+        let play = MenuItem::with_id(PLAY, play_label(playing, m), true, None);
         let item = |id: &str, text: &str| MenuItem::with_id(id, text, true, None);
+        let (bpm_up, bpm_down) = (
+            item(BPM_UP, &m.tray_bpm_up),
+            item(BPM_DOWN, &m.tray_bpm_down),
+        );
+        let (open, mini, quit) = (
+            item(OPEN, &m.tray_open),
+            item(MINI, &m.tray_mini),
+            item(QUIT, &m.tray_quit),
+        );
         let menu = Menu::with_items(&[
             &play,
             &PredefinedMenuItem::separator(),
-            &item(BPM_UP, "BPM +1"),
-            &item(BPM_DOWN, "BPM \u{2212}1"),
+            &bpm_up,
+            &bpm_down,
             &PredefinedMenuItem::separator(),
-            &item(OPEN, "Abrir janela"),
-            &item(MINI, "Mini"),
+            &open,
+            &mini,
             &PredefinedMenuItem::separator(),
-            &item(QUIT, "Sair"),
+            &quit,
         ])?;
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
@@ -74,16 +89,31 @@ impl Tray {
         Ok(Tray {
             _icon: icon,
             play,
+            bpm_up,
+            bpm_down,
+            open,
+            mini,
+            quit,
             playing,
         })
     }
 
     /// Keeps the transport item's text in step with the state.
-    pub fn set_playing(&mut self, playing: bool) {
+    pub fn set_playing(&mut self, playing: bool, m: &Messages) {
         if playing != self.playing {
             self.playing = playing;
-            self.play.set_text(play_label(playing));
+            self.play.set_text(play_label(playing, m));
         }
+    }
+
+    /// Relabels every item (the language changed).
+    pub fn set_messages(&mut self, m: &Messages) {
+        self.play.set_text(play_label(self.playing, m));
+        self.bpm_up.set_text(&m.tray_bpm_up);
+        self.bpm_down.set_text(&m.tray_bpm_down);
+        self.open.set_text(&m.tray_open);
+        self.mini.set_text(&m.tray_mini);
+        self.quit.set_text(&m.tray_quit);
     }
 }
 
@@ -148,9 +178,10 @@ mod tests {
     }
 
     #[test]
-    fn play_item_says_what_a_click_does() {
-        assert_eq!(play_label(false), "Play");
-        assert_eq!(play_label(true), "Stop");
+    fn tray_labels_follow_the_messages() {
+        let pt = Messages::builtin("pt-BR").unwrap();
+        assert_eq!(play_label(false, &Messages::english()), "Play");
+        assert_eq!(play_label(true, &pt), "Stop");
     }
 
     #[test]
