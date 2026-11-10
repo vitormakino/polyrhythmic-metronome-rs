@@ -573,11 +573,11 @@ mod tests {
     #[test]
     fn language_and_theme_change_independently() {
         let mut l = Loader::default();
-        let pt = ("/c/themes/x.toml", "accent = \"#102030\"");
+        let theme_x = ("/c/themes/x.toml", "accent = \"#102030\"");
         let r = l.reload(
             &files(&[
                 ("/c/config.toml", "language = \"pt-BR\"\ntheme = \"x\""),
-                pt,
+                theme_x,
             ]),
             Path::new("/c"),
         );
@@ -601,8 +601,8 @@ mod tests {
     }
 
     #[test]
-    fn syntax_error_in_a_locale_keeps_the_previous_messages_via_the_flag() {
-        // The Loader reads `Resolved::syntax_error`, not the warning text.
+    fn resolve_flags_a_locale_syntax_error() {
+        // The Loader relies on this flag, not on the warning text.
         assert!(resolve("de", Some("add_pulse = ")).syntax_error);
         assert!(!resolve("de", Some("add_pulse = \"x\"")).syntax_error);
     }

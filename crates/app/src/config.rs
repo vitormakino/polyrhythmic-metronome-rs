@@ -40,7 +40,7 @@ pub struct Config {
     #[serde(default = "default_language")]
     #[schemars(schema_with = "language_schema")]
     pub language: String,
-    /// Color theme: "default", "light", or the name of a file in themes/.
+    /// Color theme: "default", "light", or the name of a file in themes/ (without .toml).
     #[serde(default = "default_theme")]
     #[schemars(schema_with = "theme_schema")]
     pub theme: String,
@@ -380,6 +380,15 @@ mod tests {
             serde_json::json!(["default", "light"])
         );
         assert!(TEMPLATE.contains("theme = \"default\""));
+        let props = &config_schema()["properties"];
+        assert_eq!(
+            props["theme"]["description"],
+            "Color theme: \"default\", \"light\", or the name of a file in themes/ (without .toml)."
+        );
+        assert_eq!(
+            props["language"]["description"],
+            "Interface language: \"en\" (default), \"pt-BR\", or the code of a file in locales/."
+        );
     }
 
     #[cfg(unix)]

@@ -288,11 +288,17 @@ fn fonts() -> FontDefinitions {
     fonts
 }
 
-/// Makes `theme` the egui visuals of `ctx`.
+/// Makes `theme` the egui visuals of `ctx`, whatever the OS appearance is.
+/// egui keeps one style per dark/light slot and follows the system, so the
+/// visuals go into both slots: a switch of the OS appearance never brings
+/// back stock visuals. The theme preference is left alone (pinning it to
+/// the theme's mode would change how egui renders text and move every
+/// light-theme snapshot).
 pub fn apply(ctx: &egui::Context, theme: &Theme) {
-    ctx.set_visuals(theme.visuals());
+    let visuals = theme.visuals();
+    ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
+    ctx.set_visuals_of(egui::Theme::Light, visuals);
 }
-
 /// Install fonts and the dark visuals. Call once at startup.
 pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
@@ -448,6 +454,24 @@ pub fn paint_top_accent(painter: &Painter, theme: &Theme, rect: Rect) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn apply_wins_over_the_system_theme() {
+        let light = Theme::builtin("light").unwrap();
+        for theme in [&DARK, &light] {
+            for opposite in [egui::Theme::Dark, egui::Theme::Light] {
+                let ctx = egui::Context::default();
+                // The slot egui would otherwise follow.
+                ctx.set_theme(opposite);
+                apply(&ctx, theme);
+                assert_eq!(
+                    ctx.global_style().visuals.panel_fill,
+                    theme.visuals().panel_fill
+                );
+                assert_eq!(ctx.global_style().visuals.panel_fill, theme.bg);
+            }
+        }
+    }
+
     use super::*;
 
     #[test]

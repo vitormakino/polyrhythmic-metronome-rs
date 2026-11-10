@@ -33,7 +33,7 @@
         }
       ],
       "default": "default",
-      "description": "Color theme: \"default\", \"light\", or the name of a file in themes/."
+      "description": "Color theme: \"default\", \"light\", or the name of a file in themes/ (without .toml)."
     }
   },
   "title": "Polyrhythmic Metronome configuration",

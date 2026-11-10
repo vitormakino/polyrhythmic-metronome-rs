@@ -113,15 +113,16 @@ Start it with the directive `#:schema ../schema/theme.schema.json`. The keys
 are the ones in an Omarchy `colors.toml` (`accent`, `background`, `foreground`,
 `red`, `orange`, ... and `mode = "dark"` or `"light"`), so any Omarchy
 `colors.toml` works as a theme file. Colors are `"#rrggbb"` or `"#rgb"`. Every
-key is optional: a missing one comes from the `default` theme, and a key the
-app does not use only prints a warning.
+key is optional: a missing one comes from the `default` theme, and an unknown
+key only prints a warning.
 
 Saving `config.toml` or the theme file applies the change at once, in the
 window, the settings popover and the mini window, without restarting and
 without touching the audio. A theme with an invalid color (`accent = "orange"`)
 is rejected as a whole: the app keeps the previous theme and prints the file,
 the key and the value on stderr. The names `default`, `light` and `omarchy` are
-reserved: a file with one of those names is ignored with a warning, and
+reserved: a file with one of those names is ignored (with a warning when that name is
+the selected theme), and
 `theme = "omarchy"` uses `default` (the Omarchy integration comes with the
 Linux version).
 
