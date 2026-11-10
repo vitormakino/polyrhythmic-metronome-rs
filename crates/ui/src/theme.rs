@@ -299,6 +299,7 @@ pub fn apply(ctx: &egui::Context, theme: &Theme) {
     ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
     ctx.set_visuals_of(egui::Theme::Light, visuals);
 }
+
 /// Install fonts and the dark visuals. Call once at startup.
 pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
@@ -454,25 +455,30 @@ pub fn paint_top_accent(painter: &Painter, theme: &Theme, rect: Rect) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn apply_wins_over_the_system_theme() {
         let light = Theme::builtin("light").unwrap();
         for theme in [&DARK, &light] {
-            for opposite in [egui::Theme::Dark, egui::Theme::Light] {
+            for before in [egui::Theme::Dark, egui::Theme::Light] {
                 let ctx = egui::Context::default();
-                // The slot egui would otherwise follow.
-                ctx.set_theme(opposite);
+                ctx.set_theme(before);
                 apply(&ctx, theme);
-                assert_eq!(
-                    ctx.global_style().visuals.panel_fill,
-                    theme.visuals().panel_fill
-                );
-                assert_eq!(ctx.global_style().visuals.panel_fill, theme.bg);
+                // The OS appearance may flip at any time: whichever slot
+                // egui follows, the theme shows.
+                for system in [egui::Theme::Dark, egui::Theme::Light] {
+                    ctx.set_theme(system);
+                    assert_eq!(
+                        ctx.global_style().visuals.panel_fill,
+                        theme.bg,
+                        "{:?} theme, {before:?} then {system:?}",
+                        theme.mode
+                    );
+                }
             }
         }
     }
-
-    use super::*;
 
     #[test]
     fn dark_keeps_the_v1_colors() {
