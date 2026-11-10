@@ -6,3 +6,9 @@
 # locales/ (for example locales/de.toml, starting with
 # #:schema ../schema/locale.schema.json).
 language = "en"
+
+# Color theme: "default", "light", or the name of a file you put in themes/
+# (for example themes/nord.toml, starting with
+# #:schema ../schema/theme.schema.json). Any Omarchy colors.toml works as a
+# theme file.
+theme = "default"

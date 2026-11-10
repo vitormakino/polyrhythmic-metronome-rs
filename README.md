@@ -89,6 +89,7 @@ rewrites it afterwards.
 
 ```toml
 language = "en"   # "en", "pt-BR", or the code of a file in locales/
+theme = "default" # "default", "light", or the name of a file in themes/
 ```
 
 The interface is in English by default; `pt-BR` is built in. Saving
@@ -103,6 +104,26 @@ Start it with the directive `#:schema ../schema/locale.schema.json` and
 override only the keys you want; the rest comes from the built-in language
 (English for a code that is not built in). Keep the `{name}` placeholders of
 the English text.
+
+### Themes
+
+`default` (dark) and `light` are built in. To use your own colors, create
+`themes/<name>.toml` (for example `themes/nord.toml` plus `theme = "nord"`).
+Start it with the directive `#:schema ../schema/theme.schema.json`. The keys
+are the ones in an Omarchy `colors.toml` (`accent`, `background`, `foreground`,
+`red`, `orange`, ... and `mode = "dark"` or `"light"`), so any Omarchy
+`colors.toml` works as a theme file. Colors are `"#rrggbb"` or `"#rgb"`. Every
+key is optional: a missing one comes from the `default` theme, and a key the
+app does not use only prints a warning.
+
+Saving `config.toml` or the theme file applies the change at once, in the
+window, the settings popover and the mini window, without restarting and
+without touching the audio. A theme with an invalid color (`accent = "orange"`)
+is rejected as a whole: the app keeps the previous theme and prints the file,
+the key and the value on stderr. The names `default`, `light` and `omarchy` are
+reserved: a file with one of those names is ignored with a warning, and
+`theme = "omarchy"` uses `default` (the Omarchy integration comes with the
+Linux version).
 
 The app writes JSON Schemas to `schema/` (only when their content changes) and
 the files point to them with `#:schema` directives. Autocomplete and

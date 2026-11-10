@@ -79,6 +79,8 @@ impl Messages {
 pub struct Resolved {
     pub messages: Messages,
     pub warnings: Vec<String>,
+    /// The user's locale file did not parse, so `messages` is only the base.
+    pub syntax_error: bool,
 }
 
 /// Flat key -> text view of the messages.
@@ -126,6 +128,7 @@ pub fn resolve(code: &str, user_file: Option<&str>) -> Resolved {
         return Resolved {
             messages: base,
             warnings,
+            syntax_error: false,
         };
     };
 
@@ -141,6 +144,7 @@ pub fn resolve(code: &str, user_file: Option<&str>) -> Resolved {
             return Resolved {
                 messages: base,
                 warnings,
+                syntax_error: true,
             };
         }
     };
@@ -165,7 +169,11 @@ pub fn resolve(code: &str, user_file: Option<&str>) -> Resolved {
     }
     let messages = serde_json::from_value(serde_json::to_value(&merged).expect("map serializes"))
         .expect("merged table has exactly the Messages keys");
-    Resolved { messages, warnings }
+    Resolved {
+        messages,
+        warnings,
+        syntax_error: false,
+    }
 }
 
 /// Replaces each `{name}` found in `args`; everything else stays literal.

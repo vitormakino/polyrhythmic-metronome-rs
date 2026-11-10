@@ -18,6 +18,22 @@
       ],
       "default": "en",
       "description": "Interface language: \"en\" (default), \"pt-BR\", or the code of a file in locales/."
+    },
+    "theme": {
+      "anyOf": [
+        {
+          "enum": [
+            "default",
+            "light"
+          ]
+        },
+        {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+          "type": "string"
+        }
+      ],
+      "default": "default",
+      "description": "Color theme: \"default\", \"light\", or the name of a file in themes/."
     }
   },
   "title": "Polyrhythmic Metronome configuration",
