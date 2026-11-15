@@ -1,6 +1,7 @@
 # polyrhythmic-metronome-rs
 
-A native macOS polyrhythmic metronome written in Rust (egui + CoreAudio).
+A native macOS and iPhone polyrhythmic metronome written in Rust (egui +
+CoreAudio).
 Stack several pulses with different beat counts (4 against 3, 7 against 11,
 up to 16 pulses), set the tempo from 40 to 300 BPM, and shape every click:
 sound, pitch and intensity per beat.
@@ -39,6 +40,81 @@ The script builds the release binary, wraps it in an `.app` bundle
 (`io.github.vitormakino.polyrhythmic-metronome`) and signs it ad hoc
 (`codesign -s -`). The result is for your own machine; there is no DMG,
 notarization or App Store build.
+
+## iPhone
+
+The same metronome runs on the iPhone: the full view in portrait, with the
+same pattern, tempo and per-beat controls. The mini window, menu bar,
+hotkeys, practice sessions and config files are Mac only. Playback continues
+with the screen locked, in the background and with the silent switch on. A
+call or alarm stops it, and it stays stopped until you press Play again.
+
+### Requirements
+
+- A Mac with a current Xcode and Rust with the iOS targets:
+  `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`.
+- An iPhone with iOS 17 or later and a USB cable.
+- An Apple Account. A free one is enough (Xcode's "Personal Team").
+
+### One-time setup
+
+1. Add your Apple Account in Xcode > Settings > Accounts.
+2. Copy the signing template. The copy is ignored by git:
+
+   ```sh
+   cp ios/Signing.xcconfig.example ios/Signing.xcconfig
+   ```
+
+3. In `ios/Signing.xcconfig`, set `DEVELOPMENT_TEAM` to your Team ID (shown in
+   Xcode > Settings > Accounts when you select the team). With a free account
+   the bundle identifier must be unique to you, so if Xcode reports that it
+   is not available, change `PRODUCT_BUNDLE_IDENTIFIER` there. Set the team
+   in this file, not in Xcode's Signing & Capabilities tab, which would write
+   it into the shared project file.
+4. On the iPhone, turn on Settings > Privacy & Security > Developer Mode. It
+   appears after the phone has been connected to Xcode once, and the phone
+   restarts to enable it.
+
+### Install
+
+Open `ios/PolyrhythmicMetronome.xcodeproj`, connect the iPhone, pick it as
+the run destination and press Run (⌘R). A build phase compiles the Rust code
+(`ios/build-rust.sh`). The first build takes a few minutes.
+
+The first launch from a free account fails with an untrusted developer
+message. On the iPhone, open Settings > General > VPN & Device Management,
+select your Apple Account under "Developer App" and trust it. Then press Run
+again.
+
+### Every 7 days
+
+Apps signed with a free account expire after 7 days and then refuse to open.
+To renew it, connect the iPhone and press Run again in Xcode. Reinstalling
+keeps the saved pattern, tempo and visual offset, as long as the bundle
+identifier in `ios/Signing.xcconfig` stays the same. Deleting the app from
+the phone erases them.
+
+### Simulator
+
+```sh
+tools/ios-sim.sh                 # first available iPhone simulator
+tools/ios-sim.sh "iPhone 17 Pro" # a specific one, by name or UDID
+```
+
+It builds the Xcode project for the simulator (no signing setup needed),
+installs and launches the app, saves a screenshot to `target/ios-sim/screen.png`
+and fails if the app is not running 5 s after launch. The simulator is shut
+down at the end.
+
+### Switching to eframe
+
+The Mac app runs on eframe. Its window layer, winit, has no support for
+UIScene, which iOS 27 requires, so the iPhone app uses a small host of its own
+(`crates/ios_host`: UIKit scene, Metal, touches). Once winit supports UIScene
+([rust-windowing/winit#4723](https://github.com/rust-windowing/winit/issues/4723))
+and eframe picks that up, change `pm_ios_main` in `crates/ios/src/lib.rs` to
+run the app through `pm_shell::EframeHost` instead of `pm_ios_host::run`, and
+delete `crates/ios_host`.
 
 ## Using it
 
@@ -200,7 +276,11 @@ should be underlined.
 | `crates/core` | Domain model, exact timeline (scheduler), live edits, click synthesis, tap tempo. No I/O. |
 | `crates/audio` | Real-time engine and the CoreAudio stream (cpal) that follows the default output. |
 | `crates/ui` | egui views: full window, rhythm topology, mini window, theme. |
+| `crates/shell` | What the Mac and iPhone apps share: controller, settings, frame loop. |
 | `crates/app` | The `polyrhythmic-metronome` binary: windows, settings, menu bar, hotkeys. |
+| `crates/ios_host` | iPhone host: UIKit scene, Metal rendering and touch input for egui. |
+| `crates/ios` | The iPhone app (`pm_ios`, a static library): entry point, audio session. |
+| `ios/` | Xcode project that builds and signs the iPhone app. |
 | `tools/stress` | Stress harness (not a default workspace member). |
 | `docs/VERIFICATION.md` | Manual checks and stress results. |
 

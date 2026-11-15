@@ -1,0 +1,9 @@
+// Local signing settings. Copy to Signing.xcconfig (ignored by git) and set
+// your Apple Team ID: Xcode > Settings > Accounts > your Apple ID > Team, or
+// developer.apple.com > Membership. A free account works (Personal Team).
+//
+// With a free account the bundle identifier must be unique to you: if Xcode
+// says it is not available, change it here. Keep it the same across
+// reinstalls, or the app starts again with empty settings.
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+PRODUCT_BUNDLE_IDENTIFIER = io.github.vitormakino.polyrhythmic-metronome

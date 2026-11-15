@@ -1,0 +1,32 @@
+// Build settings of the app target. The Team ID never goes here or in the
+// project file: it comes from Signing.xcconfig (local, ignored by git; copy
+// Signing.xcconfig.example). Without it, builds with CODE_SIGNING_ALLOWED=NO
+// and simulator builds still work.
+
+PRODUCT_NAME = PolyrhythmicMetronome
+PRODUCT_BUNDLE_IDENTIFIER = io.github.vitormakino.polyrhythmic-metronome
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+SDKROOT = iphoneos
+SUPPORTED_PLATFORMS = iphoneos iphonesimulator
+TARGETED_DEVICE_FAMILY = 1
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
+// The Rust library is built for arm64 only (aarch64-apple-ios and
+// aarch64-apple-ios-sim).
+ARCHS = arm64
+
+INFOPLIST_FILE = Info.plist
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
+
+CODE_SIGN_STYLE = Automatic
+
+// The Rust build phase reads the whole workspace and writes to target/.
+ENABLE_USER_SCRIPT_SANDBOXING = NO
+
+// libpm_ios.a is copied next to the app by ios/build-rust.sh and linked from
+// the Frameworks phase; these are the system libraries it needs (from
+// `cargo rustc ... -- --print native-static-libs`).
+OTHER_LDFLAGS = -framework UIKit -framework QuartzCore -framework Metal -framework CoreGraphics -framework AudioToolbox -framework CoreAudio -framework AVFAudio -framework Foundation -framework CoreFoundation -lobjc -liconv
+
+#include? "Signing.xcconfig"

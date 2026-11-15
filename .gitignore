@@ -1,3 +1,8 @@
 /target
 /.superpowers/
 *.wav
+# Xcode: local signing settings, per-user state and build products
+/ios/Signing.xcconfig
+/ios/build/
+/ios/DerivedData/
+xcuserdata/
