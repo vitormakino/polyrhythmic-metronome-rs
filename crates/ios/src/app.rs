@@ -11,7 +11,7 @@ use std::time::Instant;
 use pm_audio::AudioService;
 use pm_shell::{AppShell, Audio, Device, Settings, Shell};
 use pm_ui::i18n::Messages;
-use pm_ui::state::{UiState, WindowMode};
+use pm_ui::state::{UiAction, UiState, WindowMode};
 use pm_ui::theme::{self, Theme};
 use pm_ui::views::full::full_view;
 
@@ -24,6 +24,12 @@ pub fn theme_for(system: Option<egui::Theme>) -> &'static str {
         Some(egui::Theme::Light) => "light",
         Some(egui::Theme::Dark) | None => "default",
     }
+}
+
+/// Whether a view's `actions` start playback: a `TogglePlay` that left the
+/// view `playing` (the view flips the state before asking).
+pub fn starts_playing(actions: &[UiAction], playing: bool) -> bool {
+    playing && actions.contains(&UiAction::TogglePlay)
 }
 
 /// What the audio session gives the app: its interruptions, delivered on
@@ -108,12 +114,16 @@ impl<A: Audio + Device> AppShell for IosApp<A> {
         self.visible = true;
         // This frame's appearance, before anything is painted with the old one.
         self.follow_system_theme(ui.ctx());
-        let was_playing = self.shell.ctl.ui.playing;
+        let activate = &self.session.activate;
         // Nothing comes back: the only host action is the hidden mini button's.
-        let _ = self.shell.view(ui, Instant::now(), full_view);
-        if !was_playing && self.shell.ctl.ui.playing {
-            (self.session.activate)();
-        }
+        let _ = self.shell.view(ui, Instant::now(), |ui, state, now| {
+            let actions = full_view(ui, state, now);
+            // Ask for the session before the shell sends Play.
+            if starts_playing(&actions, state.playing) {
+                activate();
+            }
+            actions
+        });
     }
 
     /// A suspended app never runs the delayed save: write now.
@@ -136,7 +146,6 @@ mod tests {
     use egui::Theme;
     use pm_audio::{BeatEvent, Command, DeviceInfo, OutputLatency};
     use pm_core::session::SessionProgress;
-    use pm_ui::state::UiAction;
 
     use super::*;
 
@@ -145,6 +154,14 @@ mod tests {
         assert_eq!(theme_for(Some(Theme::Light)), "light");
         assert_eq!(theme_for(Some(Theme::Dark)), "default");
         assert_eq!(theme_for(None), "default");
+    }
+
+    #[test]
+    fn only_a_toggle_that_leaves_playing_starts_playback() {
+        assert!(starts_playing(&[UiAction::TogglePlay], true));
+        assert!(!starts_playing(&[UiAction::TogglePlay], false), "a stop");
+        assert!(!starts_playing(&[UiAction::PatternChanged], true));
+        assert!(!starts_playing(&[], true));
     }
 
     /// Records the commands sent (shared, the shell owns the fake); one

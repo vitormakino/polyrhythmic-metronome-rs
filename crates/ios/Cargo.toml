@@ -32,6 +32,7 @@ assert_no_alloc.workspace = true
 [target.'cfg(target_os = "ios")'.dependencies]
 polyrhythmic-metronome-ios-host = { path = "../ios_host" }
 block2 = "0.6.2"
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
 objc2 = "0.6.5"
 objc2-avf-audio = { workspace = true, features = ["block2"] }
-objc2-foundation = { workspace = true, features = ["block2", "NSDictionary", "NSError", "NSFileManager", "NSLocale", "NSNotification", "NSOperation", "NSPathUtilities", "NSURL", "NSValue"] }
+objc2-foundation = { workspace = true, features = ["block2", "NSDictionary", "NSError", "NSLocale", "NSNotification", "NSOperation", "NSValue"] }

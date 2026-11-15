@@ -2672,6 +2672,7 @@ version = "0.1.0"
 dependencies = [
  "assert_no_alloc",
  "block2 0.6.2",
+ "dispatch2",
  "egui",
  "objc2 0.6.5",
  "objc2-avf-audio",

@@ -54,6 +54,26 @@ pub fn on_interruption(i: Interruption, playing: bool) -> Option<UiAction> {
     }
 }
 
+/// How the session is activated off the caller's thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActivationPath {
+    /// `activateWithOptions:completionHandler:` (iOS 27 and later).
+    Async,
+    /// `setActive:error:` on a background dispatch queue (older systems).
+    BackgroundQueue,
+}
+
+/// The activation path, given whether the session answers
+/// `activateWithOptions:completionHandler:`. The app runs from iOS 17, where
+/// calling it would be an unrecognized selector.
+pub fn activation_path(has_async: bool) -> ActivationPath {
+    if has_async {
+        ActivationPath::Async
+    } else {
+        ActivationPath::BackgroundQueue
+    }
+}
+
 #[cfg(target_os = "ios")]
 pub use native::AudioSession;
 
@@ -63,8 +83,10 @@ mod native {
     use std::sync::mpsc::Sender;
 
     use block2::RcBlock;
+    use dispatch2::{DispatchQoS, DispatchQueue, GlobalQueueIdentifier};
     use objc2::rc::Retained;
     use objc2::runtime::{Bool, ProtocolObject};
+    use objc2::sel;
     use objc2_avf_audio::{
         AVAudioSession, AVAudioSessionActivationOptions, AVAudioSessionCategoryPlayback,
         AVAudioSessionInterruptionNotification, AVAudioSessionInterruptionOptionKey,
@@ -75,7 +97,7 @@ mod native {
         NSObjectProtocol, NSOperationQueue, NSString,
     };
 
-    use super::{Interruption, interruption_from};
+    use super::{ActivationPath, Interruption, activation_path, interruption_from};
 
     type Observer = Retained<ProtocolObject<dyn NSObjectProtocol>>;
 
@@ -179,28 +201,52 @@ mod native {
 
     /// Activates the session without blocking the caller (activation can take
     /// a while; Apple advises against a synchronous activation on the main
-    /// thread). The outcome is only reported: the stream follows the session
-    /// on its own.
+    /// thread): the asynchronous API where the system has it (iOS 27),
+    /// else the synchronous one on a background queue. The outcome is only
+    /// reported: the stream follows the session on its own.
     fn activate() {
-        let done = RcBlock::new(|activated: Bool, error: *mut NSError| {
-            if activated.as_bool() {
-                return;
+        // SAFETY: the shared session, a thread-safe singleton.
+        let session = unsafe { AVAudioSession::sharedInstance() };
+        let has_async = session.respondsToSelector(sel!(activateWithOptions:completionHandler:));
+        match activation_path(has_async) {
+            ActivationPath::Async => {
+                let done = RcBlock::new(|activated: Bool, error: *mut NSError| {
+                    if !activated.as_bool() {
+                        // SAFETY: AVFAudio passes a valid error or null.
+                        report(unsafe { error.as_ref() });
+                    }
+                });
+                // SAFETY: the shared session, which answers the selector
+                // (checked above); the block is `'static` and only prints
+                // (AVFAudio may call it on any queue).
+                unsafe {
+                    session.activateWithOptions_completionHandler(
+                        AVAudioSessionActivationOptions::None,
+                        &done,
+                    );
+                }
             }
-            // SAFETY: AVFAudio passes a valid error or null.
-            let reason = unsafe { error.as_ref() }.map_or_else(
-                || "unknown error".to_owned(),
-                |e| e.localizedDescription().to_string(),
-            );
-            eprintln!("polyrhythmic-metronome: audio session not activated: {reason}");
-        });
-        // SAFETY: the shared session; the block is `'static` and only prints
-        // (AVFAudio may call it on any queue).
-        unsafe {
-            AVAudioSession::sharedInstance().activateWithOptions_completionHandler(
-                AVAudioSessionActivationOptions::None,
-                &done,
-            );
+            ActivationPath::BackgroundQueue => {
+                let queue = DispatchQueue::global_queue(GlobalQueueIdentifier::QualityOfService(
+                    DispatchQoS::UserInitiated,
+                ));
+                queue.exec_async(|| {
+                    // SAFETY: the shared session is thread-safe.
+                    let result = unsafe { AVAudioSession::sharedInstance().setActive_error(true) };
+                    if let Err(e) = result {
+                        report(Some(&e));
+                    }
+                });
+            }
         }
+    }
+
+    fn report(error: Option<&NSError>) {
+        let reason = error.map_or_else(
+            || "unknown error".to_owned(),
+            |e| e.localizedDescription().to_string(),
+        );
+        eprintln!("polyrhythmic-metronome: audio session not activated: {reason}");
     }
 
     /// The interruption in `note`'s `userInfo`.
@@ -237,6 +283,12 @@ mod tests {
         };
         assert_eq!(on_interruption(ended, false), None);
         assert_eq!(on_interruption(ended, true), None);
+    }
+
+    #[test]
+    fn activation_falls_back_without_the_async_api() {
+        assert_eq!(activation_path(true), ActivationPath::Async);
+        assert_eq!(activation_path(false), ActivationPath::BackgroundQueue);
     }
 
     #[test]
