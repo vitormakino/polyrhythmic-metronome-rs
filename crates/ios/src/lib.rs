@@ -27,16 +27,31 @@ static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 /// This is the one place that picks the frame the app runs in: today
 /// `pm_ios_host`, because eframe's winit has no UIScene lifecycle, which iOS
 /// 27 requires. Once winit supports UIScene (rust-windowing/winit#4723) and
-/// eframe adopts it, switch by making this function run the app through
-/// `pm_shell::EframeHost` (`eframe::run_native`) instead of
-/// `pm_ios_host::run`, then delete `crates/ios_host`.
+/// eframe adopts it, switching takes every step of "Switching to eframe" in
+/// the README:
+///
+/// 1. Run the app here through `pm_shell::EframeHost`
+///    (`eframe::run_native`) instead of `pm_ios_host::run`.
+/// 2. In `crates/ios/Cargo.toml`, drop the `polyrhythmic-metronome-ios-host`
+///    dependency, enable `polyrhythmic-metronome-shell`'s `eframe` feature
+///    and add `eframe`.
+/// 3. `EframeHost` never calls [`AppShell::on_background`] and nothing wakes
+///    `logic` off screen: hook the app's suspend to `on_background` (it
+///    saves the settings) and add a background ticker that asks for a
+///    repaint every `pm_shell::TICK`, as the Mac app's `ui-tick` thread does.
+/// 4. In `ios/Info.plist`, set `UISceneDelegateClassName` to winit's scene
+///    delegate, or remove it if winit installs its own.
+/// 5. Delete `crates/ios_host`, remove it from the root `Cargo.toml`
+///    `members`, drop `-p polyrhythmic-metronome-ios-host` from the `ios` job
+///    in `.github/workflows/ci.yml` and its row from the README's project
+///    layout table.
+///
+/// [`AppShell::on_background`]: pm_shell::AppShell::on_background
 #[cfg(target_os = "ios")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pm_ios_main() -> ! {
     use std::sync::mpsc;
 
-    use pm_audio::{AudioService, EngineInit};
-    use pm_shell::{Settings, settings};
     use pm_ui::i18n::Messages;
     use pm_ui::theme;
 
@@ -49,30 +64,13 @@ pub extern "C" fn pm_ios_main() -> ! {
     // `dirs::data_dir()` is `$HOME/Library/Application Support`, and iOS
     // sets `$HOME` to the app's data container: the file stays inside the
     // sandbox and survives reinstalls with the same bundle identifier.
-    let settings_dir = settings::default_dir();
-    let settings = settings_dir
-        .as_deref()
-        .map(Settings::load)
-        .unwrap_or_default();
+    let (settings_dir, settings) = pm_shell::load_settings();
     let language = language_for(&locale::preferred_languages());
     let messages = Messages::builtin(language).unwrap_or_else(Messages::english);
 
     pm_ios_host::run(Box::new(move |ctx| {
         theme::install(ctx);
-        let audio = match AudioService::start(EngineInit {
-            pattern: settings.pattern.clone(),
-            bpm: settings.bpm,
-            resume: None,
-            session: None,
-        }) {
-            Ok(audio) => audio,
-            Err(e) => {
-                // Only when an output refuses every configuration: nothing
-                // the app could show would make it play.
-                eprintln!("polyrhythmic-metronome: {e}");
-                std::process::exit(1);
-            }
-        };
+        let audio = pm_shell::start_audio(&settings);
         let link = SessionLink {
             interruptions,
             activate: Box::new(move || session.activate()),
