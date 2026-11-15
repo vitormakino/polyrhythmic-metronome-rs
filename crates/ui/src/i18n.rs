@@ -57,6 +57,8 @@ pub struct Messages {
     /// Accessible name of the session selector.
     pub session_select: String,
     pub session_none: String,
+    /// Next to the selector when there are no session files.
+    pub session_hint: String,
     pub session_stage: String,
     pub session_bar: String,
     pub session_time: String,

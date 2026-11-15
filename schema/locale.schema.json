@@ -102,6 +102,10 @@
       "description": "Done · continuing",
       "type": "string"
     },
+    "session_hint": {
+      "description": "Add sessions as files in sessions/",
+      "type": "string"
+    },
     "session_missing_pulse": {
       "description": "pulse {n} is not on screen",
       "type": "string"

@@ -2,7 +2,8 @@
 //! selector, and while a session runs its stage, counter, description and a
 //! stage bar (one segment per stage). The mini window shows the stage bar alone.
 //!
-//! With no session files the strip is not drawn and the layout is unchanged.
+//! With no session files the strip shows the selector and a hint on where to
+//! add them.
 
 use egui::{
     Align2, ComboBox, CornerRadius, Id, Painter, Rect, RichText, Role, Sense, Ui, UiBuilder,
@@ -29,11 +30,9 @@ const SEGMENT_GAP: f32 = 3.0;
 const RADIUS: u8 = 16;
 const SEPARATOR: &str = " · ";
 
-/// Height the strip takes in the full window: 0 when there are no sessions.
+/// Height the strip takes in the full window.
 pub fn strip_height(state: &UiState) -> f32 {
-    if state.sessions.is_empty() {
-        0.0
-    } else if state.session.is_none() {
+    if state.session.is_none() {
         STRIP_LINE_H
     } else {
         STRIP_H
@@ -43,7 +42,7 @@ pub fn strip_height(state: &UiState) -> f32 {
 /// Draws the strip in `rect`. Picking a session sets `state.session`, drops
 /// the summary and pushes `SelectSession`.
 pub fn session_strip(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiAction>) {
-    if state.sessions.is_empty() || rect.height() < 1.0 {
+    if rect.height() < 1.0 {
         return;
     }
     let t = state.theme.clone();
@@ -62,6 +61,24 @@ pub fn session_strip(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
         state.select_session(picked, actions);
     }
     if state.session.is_none() {
+        if state.sessions.is_empty() {
+            let left = combo.right() + 12.0;
+            let painted = widgets::elided(
+                &painter,
+                pos2(left, line.center().y),
+                Align2::LEFT_CENTER,
+                &m.session_hint,
+                theme::font_mono(10.0),
+                t.text_muted,
+                line.right() - left,
+            );
+            label_node(
+                ui,
+                painted,
+                ui.make_persistent_id("session-hint"),
+                &m.session_hint,
+            );
+        }
         return;
     }
 
