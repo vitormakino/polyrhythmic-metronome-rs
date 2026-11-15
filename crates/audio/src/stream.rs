@@ -19,7 +19,7 @@ use pm_core::{Bpm, MusicalPosition, Pattern};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine::{Engine, EngineHandle, EngineInit};
-use crate::messages::{Command, PositionSnapshot};
+use crate::messages::{Command, PatternUpdate, PositionSnapshot};
 use crate::platform::{output_identity, query_output_latency};
 use crate::session::SessionReader;
 use crate::watch::{self, Observation, RebuildCounts, RebuildReason, WatchState};
@@ -372,6 +372,50 @@ impl Transport {
     }
 }
 
+/// Edits a suspended service keeps back from the engine, which takes no
+/// command while paused: only the transport records them, and on resume the
+/// engine gets the latest pattern and tempo once, ahead of the `Play` that
+/// follows. Without it every slider step and pattern edit made while
+/// stopped would fill the engine's queue, then the controller's outbox,
+/// and delay the first click.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Held {
+    bpm: bool,
+    pattern: bool,
+}
+
+impl Held {
+    /// Whether `command`, sent while suspended, waits for the resume.
+    fn hold(&mut self, command: &Command) -> bool {
+        match command {
+            Command::SetBpm(_) => self.bpm = true,
+            Command::SetPattern(_) => self.pattern = true,
+            // Small and few (one per tap): they keep their order in the queue.
+            Command::Play | Command::Stop | Command::UserPulse(_) | Command::Session(_) => {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// What the engine needs to catch up with `transport` (at
+    /// `sample_rate`), and nothing is held any more.
+    fn release(&mut self, transport: &Transport, sample_rate: u32) -> Vec<Command> {
+        let held = std::mem::take(self);
+        let mut commands = Vec::new();
+        if held.pattern {
+            commands.push(Command::SetPattern(PatternUpdate::build(
+                sample_rate,
+                transport.pattern.clone(),
+            )));
+        }
+        if held.bpm {
+            commands.push(Command::SetBpm(transport.bpm));
+        }
+        commands
+    }
+}
+
 /// Runs the engine on the default output device and keeps it there.
 pub struct AudioService {
     host: cpal::Host,
@@ -396,6 +440,8 @@ pub struct AudioService {
     /// The stream is paused on purpose ([`suspend_output`](Self::suspend_output)),
     /// and a rebuilt one opens paused.
     suspended: bool,
+    /// Edits sent while suspended, for the engine on resume.
+    held: Held,
 }
 
 /// An open stream and what watches it.
@@ -480,6 +526,7 @@ impl AudioService {
             next_attempt: now + RETRY,
             clocks: (now, SystemTime::now()),
             suspended,
+            held: Held::default(),
         })
     }
 
@@ -487,7 +534,8 @@ impl AudioService {
     /// [`resume_output`](Self::resume_output); the watcher takes the
     /// silence for what it is, and a stream rebuilt meanwhile (new device,
     /// stream error) opens paused. Send `Stop` first and let the engine take
-    /// it: commands wait in the queue while paused. Meant for the iPhone
+    /// it: commands wait in the queue while paused, except `SetBpm` and
+    /// `SetPattern`, which the resume sends once, latest only. Meant for the iPhone
     /// app, which releases the audio while stopped; the Mac app never
     /// pauses.
     pub fn suspend_output(&mut self) {
@@ -507,6 +555,26 @@ impl AudioService {
     pub fn resume_output(&mut self) {
         if !std::mem::take(&mut self.suspended) {
             return;
+        }
+        let rate = self
+            .live
+            .as_ref()
+            .map_or(IDLE_SAMPLE_RATE, |live| live.info.sample_rate);
+        // Without a stream the next one opens from the transport anyway.
+        let catch_up = self.held.release(&self.transport, rate);
+        if self.live.is_some() {
+            if self.handle.commands.slots() < catch_up.len() {
+                // No room (a queue full of taps): an engine built from the
+                // transport is as current, and starts playing.
+                let now = Instant::now();
+                self.rebuild(now);
+                return;
+            }
+            for command in catch_up {
+                // Checked above: there is room.
+                let pushed = self.handle.commands.push(command);
+                debug_assert!(pushed.is_ok());
+            }
         }
         if let Some(live) = &mut self.live {
             let callbacks = live.callbacks.load(Ordering::Relaxed);
@@ -529,6 +597,11 @@ impl AudioService {
     /// Gives the command back if the queue is full. Without an output it is
     /// only recorded.
     pub fn send(&mut self, command: Command) -> Result<(), Command> {
+        // While suspended, edits only update the transport (see `Held`).
+        if self.suspended && self.held.hold(&command) {
+            self.transport.record(&command);
+            return Ok(());
+        }
         if self.live.is_some() && self.handle.commands.slots() == 0 {
             return Err(command);
         }
@@ -674,6 +747,8 @@ impl AudioService {
             }
         };
         self.last_error = None;
+        // Built from the transport: nothing left to catch up with.
+        self.held = Held::default();
         self.transport.engine_replaced();
         if let Some(command) = self.transport.queued_session() {
             // A fresh queue: there is room.
@@ -1005,6 +1080,52 @@ mod tests {
         assert_eq!(handle.underruns.load(Ordering::Relaxed), 0);
         assert_no_alloc::assert_no_alloc(|| cb.run(&mut out, &at(60_040)));
         assert_eq!(handle.underruns.load(Ordering::Relaxed), 1);
+    }
+
+    /// Many edits while suspended: none reaches the engine's queue, the
+    /// resume sends the latest pattern and tempo once, and the `Play` after
+    /// them is taken at the stream's first callback.
+    #[test]
+    fn edits_while_suspended_wait_as_one_and_play_starts_at_once() {
+        let init = EngineInit {
+            pattern: Pattern::default(),
+            bpm: Bpm::new(120),
+            resume: None,
+            session: None,
+        };
+        let mut transport = Transport::new(&init);
+        let mut held = Held::default();
+        let (mut engine, mut handle) = Engine::new(48_000, 2, init);
+        let queued = handle.commands.slots();
+        for n in 0..200 {
+            let edits = [
+                Command::SetBpm(Bpm::new(60 + n)),
+                Command::SetPattern(PatternUpdate::build(48_000, Pattern::default())),
+            ];
+            for edit in edits {
+                assert!(held.hold(&edit), "held, not queued");
+                transport.record(&edit);
+            }
+        }
+        assert_eq!(handle.commands.slots(), queued, "nothing queued");
+        assert!(!held.hold(&Command::Play));
+        assert!(!held.hold(&Command::Stop));
+
+        let catch_up = held.release(&transport, 48_000);
+        assert!(matches!(
+            catch_up.as_slice(),
+            [Command::SetPattern(_), Command::SetBpm(bpm)] if *bpm == Bpm::new(259)
+        ));
+        assert_eq!(held, Held::default());
+        assert!(held.release(&transport, 48_000).is_empty(), "sent once");
+        for command in catch_up {
+            assert!(handle.commands.push(command).is_ok());
+        }
+        assert!(handle.commands.push(Command::Play).is_ok());
+        let mut out = [0.0f32; 960];
+        engine.render(&mut out, Duration::ZERO);
+        assert!(handle.position.snapshot().playing);
+        assert!(out.iter().any(|&x| x != 0.0), "the first click sounds");
     }
 
     #[test]

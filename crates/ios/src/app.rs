@@ -48,11 +48,11 @@ impl Output for AudioService {
 }
 
 /// What the audio session gives the app: its events, delivered on the main
-/// thread, and activation and deactivation, both asynchronous (an
-/// activation answers with [`SessionEvent::Activated`]).
+/// thread, and activation and deactivation, both asynchronous (activation
+/// `id` answers with [`SessionEvent::Activated`] carrying that `id`).
 pub struct SessionLink {
     pub events: Receiver<SessionEvent>,
-    pub activate: Box<dyn Fn()>,
+    pub activate: Box<dyn Fn(u64)>,
     pub deactivate: Box<dyn Fn()>,
 }
 
@@ -119,7 +119,7 @@ impl<A: Audio + Device + Output> IosApp<A> {
     fn run(&mut self, effects: &[Effect]) {
         for effect in effects {
             match effect {
-                Effect::Activate => (self.session.activate)(),
+                Effect::Activate(id) => (self.session.activate)(*id),
                 Effect::Deactivate => (self.session.deactivate)(),
                 Effect::Resume => self.shell.audio_mut().resume_output(),
                 Effect::Pause => self.shell.audio_mut().suspend_output(),
@@ -134,8 +134,18 @@ impl<A: Audio + Device + Output> IosApp<A> {
     fn on_event(&mut self, event: SessionEvent, now: Instant) {
         match event {
             SessionEvent::Interruption(i) => self.interrupted(i, now),
-            SessionEvent::Activated(ok) => {
-                let effects = self.gate.activated(ok);
+            SessionEvent::Activated { id, result } => {
+                let effects = self.gate.activated(id, result.is_ok());
+                if let Err(reason) = &result {
+                    let cancelled = if effects.contains(&Effect::Cancel) {
+                        ", not playing"
+                    } else {
+                        ""
+                    };
+                    eprintln!(
+                        "polyrhythmic-metronome: audio session not activated{cancelled}: {reason}"
+                    );
+                }
                 self.run(&effects);
             }
             SessionEvent::MediaReset => {
@@ -229,7 +239,7 @@ mod tests {
     }
 
     /// What the output and the session were asked, in order.
-    type Log = Rc<RefCell<Vec<&'static str>>>;
+    type Log = Rc<RefCell<Vec<String>>>;
 
     /// Records the transport commands, pauses and resumes (shared, the
     /// shell owns the fake); one fixed output.
@@ -240,8 +250,8 @@ mod tests {
     impl Audio for Fake {
         fn send(&mut self, command: Command) -> Result<(), Command> {
             match command {
-                Command::Play => self.log.borrow_mut().push("Play"),
-                Command::Stop => self.log.borrow_mut().push("Stop"),
+                Command::Play => self.log.borrow_mut().push("Play".to_owned()),
+                Command::Stop => self.log.borrow_mut().push("Stop".to_owned()),
                 _ => {}
             }
             Ok(())
@@ -254,11 +264,11 @@ mod tests {
 
     impl Output for Fake {
         fn suspend_output(&mut self) {
-            self.log.borrow_mut().push("pause");
+            self.log.borrow_mut().push("pause".to_owned());
         }
 
         fn resume_output(&mut self) {
-            self.log.borrow_mut().push("resume");
+            self.log.borrow_mut().push("resume".to_owned());
         }
     }
 
@@ -305,8 +315,8 @@ mod tests {
         let (activate, deactivate) = (Rc::clone(&log), Rc::clone(&log));
         let session = SessionLink {
             events: rx,
-            activate: Box::new(move || activate.borrow_mut().push("activate")),
-            deactivate: Box::new(move || deactivate.borrow_mut().push("deactivate")),
+            activate: Box::new(move |id| activate.borrow_mut().push(format!("activate {id}"))),
+            deactivate: Box::new(move || deactivate.borrow_mut().push("deactivate".to_owned())),
         };
         let audio = Fake {
             log: Rc::clone(&log),
@@ -329,15 +339,25 @@ mod tests {
     }
 
     /// Takes what was logged so far.
-    fn taken(log: &Log) -> Vec<&'static str> {
+    fn taken(log: &Log) -> Vec<String> {
         std::mem::take(&mut *log.borrow_mut())
+    }
+
+    /// Activation `id` finished, `ok` or not.
+    fn activated(tx: &Sender<SessionEvent>, id: u64, ok: bool) {
+        let result = if ok {
+            Ok(())
+        } else {
+            Err("refused".to_owned())
+        };
+        tx.send(SessionEvent::Activated { id, result }).unwrap();
     }
 
     /// An app playing since `t0`, the log emptied.
     fn playing(t0: Instant) -> (IosApp<Fake>, Sender<SessionEvent>, Log) {
         let (mut app, tx, log) = app();
         press(&mut app, t0);
-        tx.send(SessionEvent::Activated(true)).unwrap();
+        activated(&tx, 1, true);
         app.logic_at(t0);
         assert!(app.shell.ctl.ui.playing);
         taken(&log);
@@ -368,11 +388,11 @@ mod tests {
         let t0 = Instant::now();
         press(&mut app, t0);
         // Held until the session is active; the button already shows it.
-        assert_eq!(taken(&log), ["activate"]);
+        assert_eq!(taken(&log), ["activate 1"]);
         assert!(app.shell.ctl.ui.playing);
         app.logic_at(t0 + Duration::from_millis(16));
         assert_eq!(taken(&log), Vec::<&str>::new());
-        tx.send(SessionEvent::Activated(true)).unwrap();
+        activated(&tx, 1, true);
         app.logic_at(t0 + Duration::from_millis(32));
         assert_eq!(taken(&log), ["resume", "Play"]);
         assert!(app.shell.ctl.ui.playing);
@@ -393,7 +413,7 @@ mod tests {
         assert_eq!(taken(&log), Vec::<&str>::new());
         // The next Play goes through the session again.
         press(&mut app, t1 + Duration::from_secs(60));
-        assert_eq!(taken(&log), ["activate"]);
+        assert_eq!(taken(&log), ["activate 2"]);
     }
 
     #[test]
@@ -413,12 +433,12 @@ mod tests {
         press(&mut app, t0);
         press(&mut app, t0 + Duration::from_millis(10));
         assert!(!app.shell.ctl.ui.playing);
-        tx.send(SessionEvent::Activated(true)).unwrap();
+        activated(&tx, 1, true);
         app.logic_at(t0 + Duration::from_millis(40));
-        assert_eq!(taken(&log), ["activate", "deactivate"]);
+        assert_eq!(taken(&log), ["activate 1", "deactivate"]);
         // A Play then waits for the session again.
         press(&mut app, t0 + Duration::from_secs(1));
-        assert_eq!(taken(&log), ["activate"]);
+        assert_eq!(taken(&log), ["activate 2"]);
     }
 
     #[test]
@@ -426,10 +446,10 @@ mod tests {
         let (mut app, tx, log) = app();
         let t0 = Instant::now();
         press(&mut app, t0);
-        tx.send(SessionEvent::Activated(false)).unwrap();
+        activated(&tx, 1, false);
         app.logic_at(t0 + Duration::from_millis(40));
         assert!(!app.shell.ctl.ui.playing);
-        assert_eq!(taken(&log), ["activate"]);
+        assert_eq!(taken(&log), ["activate 1"]);
     }
 
     #[test]
@@ -458,13 +478,56 @@ mod tests {
         let (mut app, tx, log) = playing(t0);
         tx.send(SessionEvent::MediaReset).unwrap();
         app.logic_at(t0 + Duration::from_millis(100));
-        assert_eq!(taken(&log), ["activate"]);
-        tx.send(SessionEvent::Activated(true)).unwrap();
+        assert_eq!(taken(&log), ["activate 2"]);
+        activated(&tx, 2, true);
         app.logic_at(t0 + Duration::from_millis(200));
         assert_eq!(taken(&log), Vec::<&str>::new(), "already playing");
         let (mut app, tx, log) = self::app();
         tx.send(SessionEvent::MediaReset).unwrap();
         app.logic_at(t0);
+        assert_eq!(taken(&log), Vec::<&str>::new());
+    }
+
+    /// Playing, a media reset asks for activation 2, then Stop releases
+    /// before it answers.
+    fn released_with_a_reactivation_pending(
+        t0: Instant,
+    ) -> (IosApp<Fake>, Sender<SessionEvent>, Log) {
+        let (mut app, tx, log) = playing(t0);
+        tx.send(SessionEvent::MediaReset).unwrap();
+        app.logic_at(t0 + Duration::from_millis(100));
+        press(&mut app, t0 + Duration::from_millis(200));
+        app.logic_at(t0 + Duration::from_secs(1));
+        assert_eq!(taken(&log), ["activate 2", "Stop", "pause", "deactivate"]);
+        (app, tx, log)
+    }
+
+    #[test]
+    fn a_stale_activation_does_not_start_the_next_play() {
+        let t0 = Instant::now();
+        let (mut app, tx, log) = released_with_a_reactivation_pending(t0);
+        press(&mut app, t0 + Duration::from_secs(2));
+        assert_eq!(taken(&log), ["activate 3"]);
+        // The reset's answer comes in first: not this Play's.
+        activated(&tx, 2, true);
+        app.logic_at(t0 + Duration::from_millis(2_010));
+        assert_eq!(taken(&log), Vec::<&str>::new());
+        assert!(app.shell.ctl.ui.playing, "still waiting");
+        activated(&tx, 3, true);
+        app.logic_at(t0 + Duration::from_millis(2_020));
+        assert_eq!(taken(&log), ["resume", "Play"]);
+    }
+
+    #[test]
+    fn a_late_activation_while_released_is_given_back() {
+        let t0 = Instant::now();
+        let (mut app, tx, log) = released_with_a_reactivation_pending(t0);
+        activated(&tx, 2, true);
+        app.logic_at(t0 + Duration::from_secs(2));
+        assert_eq!(taken(&log), ["deactivate"]);
+        // A late failure leaves nothing to undo.
+        activated(&tx, 2, false);
+        app.logic_at(t0 + Duration::from_secs(3));
         assert_eq!(taken(&log), Vec::<&str>::new());
     }
 }

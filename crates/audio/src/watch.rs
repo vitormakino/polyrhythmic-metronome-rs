@@ -14,6 +14,9 @@ use cpal::ErrorKind;
 
 /// The data callback not called for this long is a stall.
 pub(crate) const STALL: Duration = Duration::from_secs(1);
+/// A stream resumed from a pause that has not called back since, for this
+/// long, is a stall.
+pub(crate) const RESUME_STALL: Duration = Duration::from_secs(3);
 /// No default output for this long (every tick in between) is a device
 /// change to "none". A real loss is also reported by cpal as
 /// `DeviceNotAvailable`, which rebuilds at once.
@@ -85,6 +88,9 @@ pub(crate) struct WatchState {
     missing_since: Option<Instant>,
     /// A different default output seen on the previous tick only.
     candidate: Option<String>,
+    /// Resumed from a pause and no callback since: silent counts as a
+    /// stall even if the stream never ran, after [`RESUME_STALL`].
+    resumed: bool,
 }
 
 impl WatchState {
@@ -94,6 +100,7 @@ impl WatchState {
             seen: (0, now),
             missing_since: None,
             candidate: None,
+            resumed: false,
         }
     }
 
@@ -101,6 +108,7 @@ impl WatchState {
     /// a stall counts from `now`.
     pub(crate) fn restart(&mut self, callbacks: u64, now: Instant) {
         self.seen = (callbacks, now);
+        self.resumed = true;
     }
 }
 
@@ -137,6 +145,7 @@ pub(crate) fn rebuild_reason(
     // stall is measured from the last suspended tick, not the pause.
     if advanced || obs.suspended {
         state.seen = (obs.callbacks, obs.now);
+        state.resumed = false;
     }
     if let Some(kind) = obs.error {
         return Some(RebuildReason::StreamError(kind));
@@ -145,8 +154,10 @@ pub(crate) fn rebuild_reason(
     if obs.wall_jumped && !advanced && !obs.suspended {
         return Some(RebuildReason::Slept);
     }
-    // Silent only counts once the stream has run (AirPlay starts slowly).
-    if obs.callbacks > 0 && obs.now.duration_since(state.seen.1) > STALL {
+    // Silent only counts once the stream has run (AirPlay starts slowly),
+    // or, with a longer bound, once it was resumed from a pause.
+    let silent = obs.now.duration_since(state.seen.1);
+    if (state.resumed && silent > RESUME_STALL) || (obs.callbacks > 0 && silent > STALL) {
         return Some(RebuildReason::Stalled);
     }
     let changed = |to| RebuildReason::DeviceChanged {
@@ -359,6 +370,45 @@ mod tests {
             assert_eq!(s.step(0, Some("A"), false, None), None);
         }
         // ...but a resumed stream that stays silent still is one.
+        assert_eq!(
+            s.step(0, Some("A"), false, None),
+            Some(RebuildReason::Stalled)
+        );
+    }
+
+    /// Opened paused (or rebuilt while paused), then resumed: a stream that
+    /// never calls back after the resume is a stall too, after the longer
+    /// [`RESUME_STALL`] (an output can be slow to start).
+    #[test]
+    fn a_resumed_stream_that_never_calls_back_is_a_stall() {
+        let mut s = Sim::new();
+        s.suspended = true;
+        for _ in 0..8 {
+            assert_eq!(s.step(0, Some("A"), false, None), None);
+        }
+        s.suspended = false;
+        s.state.restart(s.callbacks, s.start + TICK * s.tick);
+        let ticks = (RESUME_STALL.as_millis() / TICK.as_millis()) as u32;
+        for _ in 0..ticks {
+            assert_eq!(s.step(0, Some("A"), false, None), None);
+        }
+        assert_eq!(
+            s.step(0, Some("A"), false, None),
+            Some(RebuildReason::Stalled)
+        );
+        // One that calls back is healthy, and from then on the usual bound
+        // holds.
+        let mut s = Sim::new();
+        s.suspended = true;
+        s.step(0, Some("A"), false, None);
+        s.suspended = false;
+        s.state.restart(s.callbacks, s.start + TICK * s.tick);
+        for _ in 0..40 {
+            assert_eq!(s.on(Some("A")), None);
+        }
+        for _ in 0..4 {
+            assert_eq!(s.step(0, Some("A"), false, None), None);
+        }
         assert_eq!(
             s.step(0, Some("A"), false, None),
             Some(RebuildReason::Stalled)

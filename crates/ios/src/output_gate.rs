@@ -25,9 +25,9 @@ pub const RELEASE_AFTER: Duration = Duration::from_millis(500);
 /// What the app does, in the order given.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Effect {
-    /// Ask the session for activation, off the main thread; a
-    /// `SessionEvent::Activated` follows.
-    Activate,
+    /// Ask the session for activation number `.0`, off the main thread; a
+    /// `SessionEvent::Activated` with that id follows.
+    Activate(u64),
     /// Start the paused stream.
     Resume,
     /// Apply the transport toggle now (`TogglePlay` with `ui.playing` as it is).
@@ -45,8 +45,8 @@ pub enum Effect {
 enum State {
     /// Session inactive, stream paused.
     Released,
-    /// Activation asked for; `play`: a Play waits for it.
-    Activating { play: bool },
+    /// Activation `id` asked for; `play`: a Play waits for it.
+    Activating { play: bool, id: u64 },
     /// Session active, stream running, playing.
     Active,
     /// Stopped at `since`; the release is due [`RELEASE_AFTER`] later.
@@ -56,6 +56,8 @@ enum State {
 #[derive(Debug)]
 pub struct OutputGate {
     state: State,
+    /// Id of the last activation asked for.
+    last_id: u64,
 }
 
 impl Default for OutputGate {
@@ -69,6 +71,7 @@ impl OutputGate {
     pub fn new() -> OutputGate {
         OutputGate {
             state: State::Released,
+            last_id: 0,
         }
     }
 
@@ -76,12 +79,15 @@ impl OutputGate {
     pub fn toggle(&mut self, playing: bool, now: Instant) -> Vec<Effect> {
         use State::*;
         let (state, effects) = match (self.state, playing) {
-            (Released, true) => (Activating { play: true }, vec![Effect::Activate]),
-            (Activating { .. }, true) => (Activating { play: true }, vec![]),
+            (Released, true) => {
+                let id = self.next_id();
+                (Activating { play: true, id }, vec![Effect::Activate(id)])
+            }
+            (Activating { id, .. }, true) => (Activating { play: true, id }, vec![]),
             // Still held: the stream runs and the session is active.
             (Releasing { .. } | Active, true) => (Active, vec![Effect::Toggle]),
             // `Play` was never sent: nothing to stop.
-            (Activating { .. }, false) => (Activating { play: false }, vec![]),
+            (Activating { id, .. }, false) => (Activating { play: false, id }, vec![]),
             (Active, false) => (Releasing { since: now }, vec![Effect::Toggle]),
             (state @ (Releasing { .. } | Released), false) => (state, vec![Effect::Toggle]),
         };
@@ -89,11 +95,17 @@ impl OutputGate {
         effects
     }
 
-    /// The session's activation finished, `ok` or not.
-    pub fn activated(&mut self, ok: bool) -> Vec<Effect> {
-        let State::Activating { play } = self.state else {
-            // Asked again after a media reset while held: nothing changes.
-            return vec![];
+    /// Activation `id` finished, `ok` or not. Only the latest one asked for
+    /// counts: an older answer (a media reset's, or one overtaken by a
+    /// Stop and a new Play) is not the current request's.
+    pub fn activated(&mut self, id: u64, ok: bool) -> Vec<Effect> {
+        let play = match self.state {
+            State::Activating { play, id: current } if id == current => play,
+            // A late success left the session active while stopped.
+            State::Released if ok => return vec![Effect::Deactivate],
+            // Held already (a media reset's re-activation), or the latest
+            // activation will answer.
+            _ => return vec![],
         };
         let (state, effects) = match (play, ok) {
             (true, true) => (State::Active, vec![Effect::Resume, Effect::Toggle]),
@@ -131,8 +143,18 @@ impl OutputGate {
     pub fn media_reset(&mut self) -> Vec<Effect> {
         match self.state {
             State::Released => vec![],
-            _ => vec![Effect::Activate],
+            State::Activating { play, .. } => {
+                let id = self.next_id();
+                self.state = State::Activating { play, id };
+                vec![Effect::Activate(id)]
+            }
+            State::Active | State::Releasing { .. } => vec![Effect::Activate(self.next_id())],
         }
+    }
+
+    fn next_id(&mut self) -> u64 {
+        self.last_id += 1;
+        self.last_id
     }
 
     /// Periodic: releases once the tail after Stop has passed.

@@ -81,7 +81,7 @@ pub extern "C" fn pm_ios_main() -> ! {
         let (on, off) = (Rc::clone(&session), session);
         let link = SessionLink {
             events,
-            activate: Box::new(move || on.activate()),
+            activate: Box::new(move |id| on.activate(id)),
             deactivate: Box::new(move || off.deactivate()),
         };
         Box::new(IosApp::new(audio, &settings, settings_dir, messages, link))

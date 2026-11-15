@@ -35,12 +35,15 @@ pub enum Interruption {
 }
 
 /// What the session tells the app, on the main thread.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
     Interruption(Interruption),
-    /// An activation the app asked for finished: `true` if the session is
-    /// active.
-    Activated(bool),
+    /// Activation `id`, which the app asked for, finished: the session is
+    /// active, or why not.
+    Activated {
+        id: u64,
+        result: Result<(), String>,
+    },
     /// The system's media services restarted
     /// (`AVAudioSessionMediaServicesWereResetNotification`): the category
     /// is set again, the session is inactive.
@@ -193,8 +196,8 @@ mod native {
         /// take a while; Apple advises against a synchronous activation on
         /// the main thread): the asynchronous API where the system has it
         /// (iOS 27), else the synchronous one, both from the session's
-        /// queue. Answers with [`SessionEvent::Activated`].
-        pub fn activate(&self) {
+        /// queue. Answers with [`SessionEvent::Activated`] carrying `id`.
+        pub fn activate(&self, id: u64) {
             let events = self.events.clone();
             self.queue.exec_async(move || {
                 // SAFETY: the shared session, a thread-safe singleton.
@@ -204,11 +207,13 @@ mod native {
                 match activation_path(has_async) {
                     ActivationPath::Async => {
                         let done = RcBlock::new(move |activated: Bool, error: *mut NSError| {
-                            if !activated.as_bool() {
+                            let result = if activated.as_bool() {
+                                Ok(())
+                            } else {
                                 // SAFETY: AVFAudio passes a valid error or null.
-                                report("activated", unsafe { error.as_ref() });
-                            }
-                            let _ = events.send(SessionEvent::Activated(activated.as_bool()));
+                                Err(reason(unsafe { error.as_ref() }))
+                            };
+                            let _ = events.send(SessionEvent::Activated { id, result });
                         });
                         // SAFETY: the shared session, which answers the
                         // selector (checked above); the block is `'static`
@@ -223,11 +228,9 @@ mod native {
                     }
                     ActivationPath::BackgroundQueue => {
                         // SAFETY: the shared session is thread-safe.
-                        let result = unsafe { session.setActive_error(true) };
-                        if let Err(e) = &result {
-                            report("activated", Some(e));
-                        }
-                        let _ = events.send(SessionEvent::Activated(result.is_ok()));
+                        let result =
+                            unsafe { session.setActive_error(true) }.map_err(|e| reason(Some(&e)));
+                        let _ = events.send(SessionEvent::Activated { id, result });
                     }
                 }
             });
@@ -246,7 +249,10 @@ mod native {
                     )
                 };
                 if let Err(e) = result {
-                    report("deactivated", Some(&e));
+                    eprintln!(
+                        "polyrhythmic-metronome: audio session not deactivated: {}",
+                        reason(Some(&e))
+                    );
                 }
             });
         }
@@ -301,12 +307,12 @@ mod native {
         }
     }
 
-    fn report(what: &str, error: Option<&NSError>) {
-        let reason = error.map_or_else(
+    /// What went wrong, for the log.
+    fn reason(error: Option<&NSError>) -> String {
+        error.map_or_else(
             || "unknown error".to_owned(),
             |e| e.localizedDescription().to_string(),
-        );
-        eprintln!("polyrhythmic-metronome: audio session not {what}: {reason}");
+        )
     }
 
     /// The interruption in `note`'s `userInfo`.
