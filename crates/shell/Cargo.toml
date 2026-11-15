@@ -1,0 +1,28 @@
+[package]
+name = "polyrhythmic-metronome-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Platform-free polyrhythmic metronome app: frame loop, controller and settings behind AppShell."
+
+[lib]
+name = "pm_shell"
+
+[lints]
+workspace = true
+
+[features]
+# `EframeHost`, the adapter that runs an `AppShell` as an `eframe::App`.
+eframe = ["dep:eframe"]
+
+[dependencies]
+polyrhythmic-metronome-core = { path = "../core" }
+polyrhythmic-metronome-audio = { path = "../audio" }
+polyrhythmic-metronome-ui = { path = "../ui" }
+egui.workspace = true
+eframe = { workspace = true, optional = true }
+serde.workspace = true
+toml.workspace = true
+dirs.workspace = true

@@ -2632,6 +2632,7 @@ dependencies = [
  "notify-debouncer-mini",
  "polyrhythmic-metronome-audio",
  "polyrhythmic-metronome-core",
+ "polyrhythmic-metronome-shell",
  "polyrhythmic-metronome-ui",
  "schemars",
  "serde",
@@ -2659,6 +2660,20 @@ dependencies = [
  "assert_no_alloc",
  "proptest",
  "serde",
+]
+
+[[package]]
+name = "polyrhythmic-metronome-shell"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "eframe",
+ "egui",
+ "polyrhythmic-metronome-audio",
+ "polyrhythmic-metronome-core",
+ "polyrhythmic-metronome-ui",
+ "serde",
+ "toml",
 ]
 
 [[package]]

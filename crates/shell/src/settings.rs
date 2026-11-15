@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use eframe::egui::Vec2;
+use egui::Vec2;
 use pm_core::{Bpm, Pattern};
 use pm_ui::state::WindowMode;
 use pm_ui::views::footer::MAX_VISUAL_OFFSET_MS;
@@ -186,6 +186,19 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, vec![std::ffi::OsString::from(FILE)]);
+    }
+
+    /// What must come back after a restart or a reinstall over the same
+    /// data folder, whatever the platform.
+    #[test]
+    fn settings_round_trip_keeps_pattern_bpm_offsets() {
+        let dir = TempDir::new();
+        let s = edited();
+        s.save(&dir.0).unwrap();
+        let loaded = Settings::load(&dir.0);
+        assert_eq!(loaded.pattern, s.pattern);
+        assert_eq!(loaded.bpm, s.bpm);
+        assert_eq!(loaded.visual_offsets, s.visual_offsets);
     }
 
     #[test]

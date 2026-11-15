@@ -224,7 +224,6 @@ mod tests {
     use pm_ui::state::SessionEntry;
 
     use super::*;
-    use crate::remote::{self, Remote};
 
     /// Records what was sent; refuses everything while `full`.
     #[derive(Default)]
@@ -275,6 +274,14 @@ mod tests {
         }
     }
 
+    /// What the menu bar item and the play hotkey do (the app's
+    /// `remote::view_actions`, tested there): flip `ui.playing` like the
+    /// view's button and apply `TogglePlay`.
+    fn toggle_from_remote(c: &mut Controller, audio: &mut Fake) {
+        c.ui.playing = !c.ui.playing;
+        c.apply(audio, UiAction::TogglePlay);
+    }
+
     /// A controller that is playing with pulse 0 lit.
     fn lit() -> (Controller, Fake) {
         let mut audio = fake();
@@ -300,9 +307,7 @@ mod tests {
         let (mut c, mut audio) = lit();
         let pulse = c.ui.pattern.pulses[0].id;
         // Not through a view's button: the menu bar item or the hotkey.
-        for action in remote::view_actions(&mut c.ui, Remote::TogglePlay) {
-            c.apply(&mut audio, action);
-        }
+        toggle_from_remote(&mut c, &mut audio);
         assert!(!c.ui.playing);
         assert_eq!(c.ui.active_beat(pulse), None);
         assert_eq!(c.ui.pending_beats(), 0);
@@ -435,9 +440,7 @@ mod tests {
         for action in actions {
             c.apply(&mut audio, action);
         }
-        for action in remote::view_actions(&mut c.ui, Remote::TogglePlay) {
-            c.apply(&mut audio, action);
-        }
+        toggle_from_remote(&mut c, &mut audio);
         assert!(
             audio
                 .sent

@@ -18,6 +18,7 @@ workspace = true
 polyrhythmic-metronome-core = { path = "../core" }
 polyrhythmic-metronome-audio = { path = "../audio" }
 polyrhythmic-metronome-ui = { path = "../ui" }
+polyrhythmic-metronome-shell = { path = "../shell", features = ["eframe"] }
 eframe.workspace = true
 serde.workspace = true
 toml.workspace = true
