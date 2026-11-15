@@ -1,7 +1,8 @@
-//! The app's `AVAudioSession`: category `playback` (plays with the silent
-//! switch on and, with `UIBackgroundModes` = `audio`, with the screen
-//! locked), activated asynchronously, and its interruptions forwarded to the
-//! app.
+//! The app's `AVAudioSession`: category `playback` with `mixWithOthers`
+//! (plays with the silent switch on, with the screen locked thanks to
+//! `UIBackgroundModes` = `audio`, and over music from other apps), activated
+//! only while playing (see [`crate::output_gate`]), off the main thread, and
+//! its events forwarded to the app.
 //!
 //! The decisions are pure and build anywhere ([`Interruption`],
 //! [`interruption_from`], [`on_interruption`]); the Objective-C side,
@@ -10,6 +11,14 @@
 //! Route changes (headphones in or out) are not observed here: `pm_audio`
 //! reads the session's current route on every service tick and rebuilds the
 //! stream on the new output, the engine continuing from the same point.
+//!
+//! cpal 0.18.2 (`host::coreaudio::ios`) never sets the category: it only
+//! sets the preferred IO buffer duration, so ours stands. Its own
+//! interruption observer stops the unit when one begins and, when it ends
+//! with "should resume", activates the session synchronously and restarts
+//! the unit only if it was running when the interruption began. The app
+//! pauses the stream right after an interruption begins (so cpal's restart
+//! is skipped) and deactivates again what cpal activated.
 
 use pm_ui::state::UiAction;
 
@@ -23,6 +32,19 @@ pub enum Interruption {
     Ended {
         should_resume: bool,
     },
+}
+
+/// What the session tells the app, on the main thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionEvent {
+    Interruption(Interruption),
+    /// An activation the app asked for finished: `true` if the session is
+    /// active.
+    Activated(bool),
+    /// The system's media services restarted
+    /// (`AVAudioSessionMediaServicesWereResetNotification`): the category
+    /// is set again, the session is inactive.
+    MediaReset,
 }
 
 /// `AVAudioSessionInterruptionTypeBegan` / `Ended` (AVAudioSessionTypes.h).
@@ -83,51 +105,61 @@ mod native {
     use std::sync::mpsc::Sender;
 
     use block2::RcBlock;
-    use dispatch2::{DispatchQoS, DispatchQueue, GlobalQueueIdentifier};
+    use dispatch2::{
+        DispatchQoS, DispatchQueue, DispatchQueueAttr, DispatchRetained, GlobalQueueIdentifier,
+    };
     use objc2::rc::Retained;
     use objc2::runtime::{Bool, ProtocolObject};
     use objc2::sel;
     use objc2_avf_audio::{
-        AVAudioSession, AVAudioSessionActivationOptions, AVAudioSessionCategoryPlayback,
-        AVAudioSessionInterruptionNotification, AVAudioSessionInterruptionOptionKey,
-        AVAudioSessionInterruptionTypeKey, AVAudioSessionMediaServicesWereResetNotification,
+        AVAudioSession, AVAudioSessionActivationOptions, AVAudioSessionCategoryOptions,
+        AVAudioSessionCategoryPlayback, AVAudioSessionInterruptionNotification,
+        AVAudioSessionInterruptionOptionKey, AVAudioSessionInterruptionTypeKey,
+        AVAudioSessionMediaServicesWereResetNotification, AVAudioSessionSetActiveOptions,
     };
     use objc2_foundation::{
         NSError, NSNotification, NSNotificationCenter, NSNotificationName, NSNumber,
         NSObjectProtocol, NSOperationQueue, NSString,
     };
 
-    use super::{ActivationPath, Interruption, activation_path, interruption_from};
+    use super::{ActivationPath, SessionEvent, activation_path, interruption_from};
 
     type Observer = Retained<ProtocolObject<dyn NSObjectProtocol>>;
 
-    /// The configured session and its notification observers (removed on drop).
+    /// The configured session, its notification observers (removed on drop)
+    /// and the queue its activations and deactivations run on.
     pub struct AudioSession {
         observers: Vec<Observer>,
+        /// Serial: a deactivation and the activation asked for right after
+        /// it run in that order.
+        queue: DispatchRetained<DispatchQueue>,
+        events: Sender<SessionEvent>,
     }
 
     impl AudioSession {
-        /// Sets the category, asks for activation and starts forwarding
-        /// interruptions to `interruptions`, on the main thread (the
-        /// observers run on the main queue). Call before the audio stream
-        /// opens, so it opens in the `playback` category.
-        pub fn start(interruptions: Sender<Interruption>) -> AudioSession {
+        /// Sets the category and starts forwarding the session's events to
+        /// `events`, on the main thread (the observers run on the main
+        /// queue). Activates nothing: see [`activate`](Self::activate).
+        /// Call before the audio stream opens, so it opens in this category.
+        pub fn start(events: Sender<SessionEvent>) -> AudioSession {
             configure();
-            activate();
+            let tx = events.clone();
             let on_interruption = RcBlock::new(move |note: NonNull<NSNotification>| {
                 // SAFETY: the center passes a valid notification.
                 let note = unsafe { note.as_ref() };
                 if let Some(i) = parse(note) {
                     // The app is gone if the receiver is: nothing to stop.
-                    let _ = interruptions.send(i);
+                    let _ = tx.send(SessionEvent::Interruption(i));
                 }
             });
             // The system's media services restarted: every session setting
             // is lost (Apple's guidance is to set it up again). The stream
-            // stalls and `pm_audio` rebuilds it.
-            let on_reset = RcBlock::new(|_note: NonNull<NSNotification>| {
+            // fails and `pm_audio` rebuilds it; the app activates again if
+            // it holds the audio.
+            let tx = events.clone();
+            let on_reset = RcBlock::new(move |_note: NonNull<NSNotification>| {
                 configure();
-                activate();
+                let _ = tx.send(SessionEvent::MediaReset);
             });
             // SAFETY: AVFAudio's notification name constants.
             let (interruption, reset) = unsafe {
@@ -143,13 +175,80 @@ mod native {
             if let Some(name) = reset {
                 observers.push(observe(name, &on_reset));
             }
-            AudioSession { observers }
+            let queue = DispatchQueue::new_with_target(
+                "polyrhythmic-metronome.audio-session",
+                DispatchQueueAttr::SERIAL,
+                Some(&DispatchQueue::global_queue(
+                    GlobalQueueIdentifier::QualityOfService(DispatchQoS::UserInitiated),
+                )),
+            );
+            AudioSession {
+                observers,
+                queue,
+                events,
+            }
         }
 
-        /// Asks for activation again, before playing: an interruption leaves
-        /// the session inactive. Cheap when it is already active.
+        /// Activates the session without blocking the caller (activation can
+        /// take a while; Apple advises against a synchronous activation on
+        /// the main thread): the asynchronous API where the system has it
+        /// (iOS 27), else the synchronous one, both from the session's
+        /// queue. Answers with [`SessionEvent::Activated`].
         pub fn activate(&self) {
-            activate();
+            let events = self.events.clone();
+            self.queue.exec_async(move || {
+                // SAFETY: the shared session, a thread-safe singleton.
+                let session = unsafe { AVAudioSession::sharedInstance() };
+                let has_async =
+                    session.respondsToSelector(sel!(activateWithOptions:completionHandler:));
+                match activation_path(has_async) {
+                    ActivationPath::Async => {
+                        let done = RcBlock::new(move |activated: Bool, error: *mut NSError| {
+                            if !activated.as_bool() {
+                                // SAFETY: AVFAudio passes a valid error or null.
+                                report("activated", unsafe { error.as_ref() });
+                            }
+                            let _ = events.send(SessionEvent::Activated(activated.as_bool()));
+                        });
+                        // SAFETY: the shared session, which answers the
+                        // selector (checked above); the block is `'static`
+                        // and only prints and sends (AVFAudio may call it on
+                        // any queue).
+                        unsafe {
+                            session.activateWithOptions_completionHandler(
+                                AVAudioSessionActivationOptions::None,
+                                &done,
+                            );
+                        }
+                    }
+                    ActivationPath::BackgroundQueue => {
+                        // SAFETY: the shared session is thread-safe.
+                        let result = unsafe { session.setActive_error(true) };
+                        if let Err(e) = &result {
+                            report("activated", Some(e));
+                        }
+                        let _ = events.send(SessionEvent::Activated(result.is_ok()));
+                    }
+                }
+            });
+        }
+
+        /// Deactivates the session from its queue, telling the other apps
+        /// they may resume. Pause the stream first: the session must have no
+        /// running I/O.
+        pub fn deactivate(&self) {
+            self.queue.exec_async(|| {
+                // SAFETY: the shared session is thread-safe.
+                let result = unsafe {
+                    AVAudioSession::sharedInstance().setActive_withOptions_error(
+                        false,
+                        AVAudioSessionSetActiveOptions::NotifyOthersOnDeactivation,
+                    )
+                };
+                if let Err(e) = result {
+                    report("deactivated", Some(&e));
+                }
+            });
         }
     }
 
@@ -181,15 +280,18 @@ mod native {
         }
     }
 
-    /// Category `playback`. A plain setter, quick enough for the main thread
-    /// (activation is the slow part).
+    /// Category `playback`, mixing with other apps' audio. A plain setter,
+    /// quick enough for the main thread (activation is the slow part).
     fn configure() {
         // SAFETY: AVFAudio's category constant and the shared session.
         let result = unsafe {
             let Some(playback) = AVAudioSessionCategoryPlayback else {
                 return;
             };
-            AVAudioSession::sharedInstance().setCategory_error(playback)
+            AVAudioSession::sharedInstance().setCategory_withOptions_error(
+                playback,
+                AVAudioSessionCategoryOptions::MixWithOthers,
+            )
         };
         if let Err(e) = result {
             eprintln!(
@@ -199,58 +301,16 @@ mod native {
         }
     }
 
-    /// Activates the session without blocking the caller (activation can take
-    /// a while; Apple advises against a synchronous activation on the main
-    /// thread): the asynchronous API where the system has it (iOS 27),
-    /// else the synchronous one on a background queue. The outcome is only
-    /// reported: the stream follows the session on its own.
-    fn activate() {
-        // SAFETY: the shared session, a thread-safe singleton.
-        let session = unsafe { AVAudioSession::sharedInstance() };
-        let has_async = session.respondsToSelector(sel!(activateWithOptions:completionHandler:));
-        match activation_path(has_async) {
-            ActivationPath::Async => {
-                let done = RcBlock::new(|activated: Bool, error: *mut NSError| {
-                    if !activated.as_bool() {
-                        // SAFETY: AVFAudio passes a valid error or null.
-                        report(unsafe { error.as_ref() });
-                    }
-                });
-                // SAFETY: the shared session, which answers the selector
-                // (checked above); the block is `'static` and only prints
-                // (AVFAudio may call it on any queue).
-                unsafe {
-                    session.activateWithOptions_completionHandler(
-                        AVAudioSessionActivationOptions::None,
-                        &done,
-                    );
-                }
-            }
-            ActivationPath::BackgroundQueue => {
-                let queue = DispatchQueue::global_queue(GlobalQueueIdentifier::QualityOfService(
-                    DispatchQoS::UserInitiated,
-                ));
-                queue.exec_async(|| {
-                    // SAFETY: the shared session is thread-safe.
-                    let result = unsafe { AVAudioSession::sharedInstance().setActive_error(true) };
-                    if let Err(e) = result {
-                        report(Some(&e));
-                    }
-                });
-            }
-        }
-    }
-
-    fn report(error: Option<&NSError>) {
+    fn report(what: &str, error: Option<&NSError>) {
         let reason = error.map_or_else(
             || "unknown error".to_owned(),
             |e| e.localizedDescription().to_string(),
         );
-        eprintln!("polyrhythmic-metronome: audio session not activated: {reason}");
+        eprintln!("polyrhythmic-metronome: audio session not {what}: {reason}");
     }
 
     /// The interruption in `note`'s `userInfo`.
-    fn parse(note: &NSNotification) -> Option<Interruption> {
+    fn parse(note: &NSNotification) -> Option<super::Interruption> {
         let info = note.userInfo()?;
         let number = |key: Option<&NSString>| -> Option<usize> {
             let value = info.objectForKey(key?)?;

@@ -235,6 +235,12 @@ impl<A: Audio + Device> Shell<A> {
         rest
     }
 
+    /// The output, for what a host does with it beyond the frame loop (the
+    /// iPhone app pauses it while stopped).
+    pub fn audio_mut(&mut self) -> &mut A {
+        &mut self.audio
+    }
+
     /// Handles a view's action (from a view or a host's own controls):
     /// `SetVisualOffset` here, the engine's through the [`Controller`].
     /// Gives back the ones that concern the host (`ToggleMini`).

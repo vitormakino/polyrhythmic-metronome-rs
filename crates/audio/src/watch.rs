@@ -96,6 +96,12 @@ impl WatchState {
             candidate: None,
         }
     }
+
+    /// The stream starts again after a pause, `callbacks` callbacks so far:
+    /// a stall counts from `now`.
+    pub(crate) fn restart(&mut self, callbacks: u64, now: Instant) {
+        self.seen = (callbacks, now);
+    }
 }
 
 /// One tick's view of an open stream.
@@ -113,6 +119,12 @@ pub(crate) struct Observation<'a> {
     pub uid: &'a str,
     /// UID of the default output now (`None`: none, or the query failed).
     pub default_uid: Option<String>,
+    /// The service paused the stream on purpose
+    /// ([`AudioService::suspend_output`](crate::AudioService::suspend_output)):
+    /// no callbacks are expected, so silence and a wall-clock jump mean
+    /// nothing, and the paused time does not count once it resumes. Errors
+    /// and device changes still rebuild (the new stream stays paused).
+    pub suspended: bool,
 }
 
 /// Whether the stream `obs` describes must be rebuilt, and why.
@@ -121,14 +133,16 @@ pub(crate) fn rebuild_reason(
     obs: Observation<'_>,
 ) -> Option<RebuildReason> {
     let advanced = obs.callbacks != state.seen.0;
-    if advanced {
+    // While suspended the count is taken as moving: back from a pause, a
+    // stall is measured from the last suspended tick, not the pause.
+    if advanced || obs.suspended {
         state.seen = (obs.callbacks, obs.now);
     }
     if let Some(kind) = obs.error {
         return Some(RebuildReason::StreamError(kind));
     }
     // A wall-clock step alone (NTP, the user setting the time) is not sleep.
-    if obs.wall_jumped && !advanced {
+    if obs.wall_jumped && !advanced && !obs.suspended {
         return Some(RebuildReason::Slept);
     }
     // Silent only counts once the stream has run (AirPlay starts slowly).
@@ -176,6 +190,8 @@ mod tests {
         start: Instant,
         tick: u32,
         callbacks: u64,
+        /// The service paused the stream on purpose.
+        suspended: bool,
     }
 
     impl Sim {
@@ -186,6 +202,7 @@ mod tests {
                 start,
                 tick: 0,
                 callbacks: 0,
+                suspended: false,
             }
         }
 
@@ -208,6 +225,7 @@ mod tests {
                     error,
                     uid: "A",
                     default_uid: default_uid.map(str::to_owned),
+                    suspended: self.suspended,
                 },
             )
         }
@@ -322,6 +340,51 @@ mod tests {
         for _ in 0..20 {
             assert_eq!(s.step(0, Some("A"), false, None), None);
         }
+    }
+
+    #[test]
+    fn a_suspended_stream_is_neither_stalled_nor_asleep() {
+        let mut s = Sim::new();
+        s.on(Some("A"));
+        s.suspended = true;
+        // Minutes without a callback, and the wall clock jumping (the app
+        // was suspended by the system): neither is a fault while paused.
+        for _ in 0..400 {
+            assert_eq!(s.step(0, Some("A"), false, None), None);
+        }
+        assert_eq!(s.step(0, Some("A"), true, None), None);
+        // Resumed: the paused time does not count towards a stall...
+        s.suspended = false;
+        for _ in 0..4 {
+            assert_eq!(s.step(0, Some("A"), false, None), None);
+        }
+        // ...but a resumed stream that stays silent still is one.
+        assert_eq!(
+            s.step(0, Some("A"), false, None),
+            Some(RebuildReason::Stalled)
+        );
+    }
+
+    #[test]
+    fn a_suspended_stream_still_follows_errors_and_devices() {
+        let mut s = Sim::new();
+        s.on(Some("A"));
+        s.suspended = true;
+        assert_eq!(
+            s.step(0, Some("A"), false, Some(ErrorKind::StreamInvalidated)),
+            Some(RebuildReason::StreamError(ErrorKind::StreamInvalidated))
+        );
+        let mut s = Sim::new();
+        s.on(Some("A"));
+        s.suspended = true;
+        assert_eq!(s.step(0, Some("B"), false, None), None);
+        assert_eq!(
+            s.step(0, Some("B"), false, None),
+            Some(RebuildReason::DeviceChanged {
+                from: Some("A".to_owned()),
+                to: Some("B".to_owned())
+            })
+        );
     }
 
     #[test]

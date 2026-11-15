@@ -2,7 +2,7 @@
 //! (audio ticks, beat events, device and visual offset following, action
 //! handling, delayed settings saving) in [`Shell`], the engine commands in
 //! [`controller`], the saved [`settings`] and the hosts' common startup
-//! ([`load_settings`], [`start_audio`]).
+//! ([`load_settings`], [`start_audio`], [`start_audio_suspended`]).
 //!
 //! A host drives an [`AppShell`]: the Mac app through [`EframeHost`] (feature
 //! `eframe`), the iPhone app through its own bridge. Each host's app holds a
@@ -22,4 +22,4 @@ pub use controller::{Audio, Controller};
 pub use eframe_host::EframeHost;
 pub use settings::Settings;
 pub use shell::{AppShell, Device, Shell, TICK, WindowSettings};
-pub use startup::{load_settings, start_audio};
+pub use startup::{load_settings, start_audio, start_audio_suspended};

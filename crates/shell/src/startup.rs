@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use pm_audio::{AudioService, EngineInit};
+use pm_audio::{AudioError, AudioService, EngineInit};
 
 use crate::settings::{self, Settings};
 
@@ -20,7 +20,21 @@ pub fn load_settings() -> (Option<PathBuf>, Settings) {
 /// refuses every configuration: nothing the app could show would make it
 /// play.
 pub fn start_audio(settings: &Settings) -> AudioService {
-    match AudioService::start(EngineInit {
+    start(settings, AudioService::start)
+}
+
+/// [`start_audio`] with the stream opened but not started (see
+/// `AudioService::start_suspended`): for the iPhone app, which starts it
+/// only once its audio session is active.
+pub fn start_audio_suspended(settings: &Settings) -> AudioService {
+    start(settings, AudioService::start_suspended)
+}
+
+fn start(
+    settings: &Settings,
+    start: impl FnOnce(EngineInit) -> Result<AudioService, AudioError>,
+) -> AudioService {
+    match start(EngineInit {
         pattern: settings.pattern.clone(),
         bpm: settings.bpm,
         resume: None,

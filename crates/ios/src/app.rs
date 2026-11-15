@@ -1,7 +1,8 @@
 //! The iPhone app: [`pm_shell::Shell`] in the full view only, without what
 //! is Mac only (mini window button, session strip, config files), with the
-//! theme following the system's light or dark mode and the audio session's
-//! interruptions stopping playback.
+//! theme following the system's light or dark mode, the audio held only
+//! while playing ([`OutputGate`]) and the audio session's interruptions
+//! stopping playback.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,7 +16,8 @@ use pm_ui::state::{UiAction, UiState, WindowMode};
 use pm_ui::theme::{self, Theme};
 use pm_ui::views::full::full_view;
 
-use crate::audio_session::{Interruption, on_interruption};
+use crate::audio_session::{Interruption, SessionEvent, on_interruption};
+use crate::output_gate::{Effect, OutputGate};
 
 /// The built-in theme for the system's appearance: `"light"` in light mode,
 /// `"default"` (dark) in dark mode or when the system does not say.
@@ -26,31 +28,48 @@ pub fn theme_for(system: Option<egui::Theme>) -> &'static str {
     }
 }
 
-/// Whether a view's `actions` start playback: a `TogglePlay` that left the
-/// view `playing` (the view flips the state before asking).
-pub fn starts_playing(actions: &[UiAction], playing: bool) -> bool {
-    playing && actions.contains(&UiAction::TogglePlay)
+/// An output the app can pause while stopped: [`AudioService`], or a fake
+/// in tests.
+pub trait Output {
+    /// See `AudioService::suspend_output`.
+    fn suspend_output(&mut self);
+    /// See `AudioService::resume_output`.
+    fn resume_output(&mut self);
 }
 
-/// What the audio session gives the app: its interruptions, delivered on
-/// the main thread, and a way to ask for activation again before playing.
+impl Output for AudioService {
+    fn suspend_output(&mut self) {
+        AudioService::suspend_output(self);
+    }
+
+    fn resume_output(&mut self) {
+        AudioService::resume_output(self);
+    }
+}
+
+/// What the audio session gives the app: its events, delivered on the main
+/// thread, and activation and deactivation, both asynchronous (an
+/// activation answers with [`SessionEvent::Activated`]).
 pub struct SessionLink {
-    pub interruptions: Receiver<Interruption>,
+    pub events: Receiver<SessionEvent>,
     pub activate: Box<dyn Fn()>,
+    pub deactivate: Box<dyn Fn()>,
 }
 
-pub struct IosApp<A: Audio + Device = AudioService> {
+pub struct IosApp<A: Audio + Device + Output = AudioService> {
     shell: Shell<A>,
     session: SessionLink,
+    gate: OutputGate,
     /// The built-in theme in use; `None` until the first check.
     theme: Option<&'static str>,
     /// Frames are drawn (`false` from `on_background` to the next frame).
     visible: bool,
 }
 
-impl<A: Audio + Device> IosApp<A> {
+impl<A: Audio + Device + Output> IosApp<A> {
     /// Starts from the saved `settings` in the full view, saving into
-    /// `settings_dir`, showing `messages`.
+    /// `settings_dir`, showing `messages`. Activates nothing: `audio` should
+    /// start suspended, and the session is activated at the first Play.
     pub fn new(
         audio: A,
         settings: &Settings,
@@ -70,6 +89,7 @@ impl<A: Audio + Device> IosApp<A> {
         IosApp {
             shell: Shell::new(audio, ui, &settings, settings_dir),
             session,
+            gate: OutputGate::new(),
             theme: None,
             visible: true,
         }
@@ -88,42 +108,92 @@ impl<A: Audio + Device> IosApp<A> {
         }
     }
 
-    /// Stops on an interruption that begins while playing, as the
-    /// transport button would.
-    fn interrupted(&mut self, i: Interruption) {
-        let ui = &mut self.shell.ctl.ui;
-        if let Some(action) = on_interruption(i, ui.playing) {
-            ui.playing = !ui.playing;
-            self.shell.apply(action);
+    /// The transport was toggled (`ui.playing` already flipped): a Play
+    /// waits for the session, a Stop releases it a little later.
+    fn toggled(&mut self, now: Instant) {
+        let effects = self.gate.toggle(self.shell.ctl.ui.playing, now);
+        self.run(&effects);
+    }
+
+    /// Carries out the gate's effects, in order.
+    fn run(&mut self, effects: &[Effect]) {
+        for effect in effects {
+            match effect {
+                Effect::Activate => (self.session.activate)(),
+                Effect::Deactivate => (self.session.deactivate)(),
+                Effect::Resume => self.shell.audio_mut().resume_output(),
+                Effect::Pause => self.shell.audio_mut().suspend_output(),
+                Effect::Toggle => {
+                    let _ = self.shell.apply(UiAction::TogglePlay);
+                }
+                Effect::Cancel => self.shell.ctl.ui.playing = false,
+            }
         }
+    }
+
+    fn on_event(&mut self, event: SessionEvent, now: Instant) {
+        match event {
+            SessionEvent::Interruption(i) => self.interrupted(i, now),
+            SessionEvent::Activated(ok) => {
+                let effects = self.gate.activated(ok);
+                self.run(&effects);
+            }
+            SessionEvent::MediaReset => {
+                let effects = self.gate.media_reset();
+                self.run(&effects);
+            }
+        }
+    }
+
+    /// Stops on an interruption that begins while playing, as the
+    /// transport button would, then lets the gate release.
+    fn interrupted(&mut self, i: Interruption, now: Instant) {
+        let ui = &mut self.shell.ctl.ui;
+        if on_interruption(i, ui.playing).is_some() {
+            ui.playing = !ui.playing;
+            self.toggled(now);
+        }
+        let effects = self.gate.interrupted(i);
+        self.run(&effects);
+    }
+
+    /// [`AppShell::logic`] at `now`.
+    fn logic_at(&mut self, now: Instant) {
+        let events: Vec<SessionEvent> = self.session.events.try_iter().collect();
+        for event in events {
+            self.on_event(event, now);
+        }
+        self.shell.logic(now, self.visible);
+        let effects = self.gate.tick(now);
+        self.run(&effects);
     }
 }
 
-impl<A: Audio + Device> AppShell for IosApp<A> {
+impl<A: Audio + Device + Output> AppShell for IosApp<A> {
     /// Before every frame and, in the background, on the host's wake-ups.
     fn logic(&mut self, ctx: &egui::Context) {
-        let interruptions: Vec<Interruption> = self.session.interruptions.try_iter().collect();
-        for i in interruptions {
-            self.interrupted(i);
-        }
         self.follow_system_theme(ctx);
-        self.shell.logic(Instant::now(), self.visible);
+        self.logic_at(Instant::now());
     }
 
     fn ui(&mut self, ui: &mut egui::Ui) {
         self.visible = true;
         // This frame's appearance, before anything is painted with the old one.
         self.follow_system_theme(ui.ctx());
-        let activate = &self.session.activate;
+        let now = Instant::now();
+        let mut toggled = false;
         // Nothing comes back: the only host action is the hidden mini button's.
-        let _ = self.shell.view(ui, Instant::now(), |ui, state, now| {
-            let actions = full_view(ui, state, now);
-            // Ask for the session before the shell sends Play.
-            if starts_playing(&actions, state.playing) {
-                activate();
-            }
+        let _ = self.shell.view(ui, now, |ui, state, now| {
+            let mut actions = full_view(ui, state, now);
+            // The transport goes through the gate, after the view's other
+            // actions.
+            toggled = actions.contains(&UiAction::TogglePlay);
+            actions.retain(|a| *a != UiAction::TogglePlay);
             actions
         });
+        if toggled {
+            self.toggled(now);
+        }
     }
 
     /// A suspended app never runs the delayed save: write now.
@@ -142,12 +212,14 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::mpsc::{self, Sender};
+    use std::time::Duration;
 
     use egui::Theme;
     use pm_audio::{BeatEvent, Command, DeviceInfo, OutputLatency};
     use pm_core::session::SessionProgress;
 
     use super::*;
+    use crate::output_gate::RELEASE_AFTER;
 
     #[test]
     fn light_system_picks_light_theme() {
@@ -156,33 +228,37 @@ mod tests {
         assert_eq!(theme_for(None), "default");
     }
 
-    #[test]
-    fn only_a_toggle_that_leaves_playing_starts_playback() {
-        assert!(starts_playing(&[UiAction::TogglePlay], true));
-        assert!(!starts_playing(&[UiAction::TogglePlay], false), "a stop");
-        assert!(!starts_playing(&[UiAction::PatternChanged], true));
-        assert!(!starts_playing(&[], true));
-    }
+    /// What the output and the session were asked, in order.
+    type Log = Rc<RefCell<Vec<&'static str>>>;
 
-    /// Records the commands sent (shared, the shell owns the fake); one
-    /// fixed output.
-    #[derive(Default)]
+    /// Records the transport commands, pauses and resumes (shared, the
+    /// shell owns the fake); one fixed output.
     struct Fake {
-        sent: Rc<RefCell<Vec<&'static str>>>,
+        log: Log,
     }
 
     impl Audio for Fake {
         fn send(&mut self, command: Command) -> Result<(), Command> {
-            self.sent.borrow_mut().push(match command {
-                Command::Play => "Play",
-                Command::Stop => "Stop",
-                _ => "other",
-            });
+            match command {
+                Command::Play => self.log.borrow_mut().push("Play"),
+                Command::Stop => self.log.borrow_mut().push("Stop"),
+                _ => {}
+            }
             Ok(())
         }
 
         fn sample_rate(&self) -> u32 {
             48_000
+        }
+    }
+
+    impl Output for Fake {
+        fn suspend_output(&mut self) {
+            self.log.borrow_mut().push("pause");
+        }
+
+        fn resume_output(&mut self) {
+            self.log.borrow_mut().push("resume");
         }
     }
 
@@ -221,12 +297,19 @@ mod tests {
         }
     }
 
-    /// An app on the fake output, and the sender of its interruptions.
-    fn app(audio: Fake) -> (IosApp<Fake>, Sender<Interruption>) {
+    /// An app on the fake output and session, the sender of its session
+    /// events and the log both write to.
+    fn app() -> (IosApp<Fake>, Sender<SessionEvent>, Log) {
+        let log: Log = Rc::default();
         let (tx, rx) = mpsc::channel();
+        let (activate, deactivate) = (Rc::clone(&log), Rc::clone(&log));
         let session = SessionLink {
-            interruptions: rx,
-            activate: Box::new(|| {}),
+            events: rx,
+            activate: Box::new(move || activate.borrow_mut().push("activate")),
+            deactivate: Box::new(move || deactivate.borrow_mut().push("deactivate")),
+        };
+        let audio = Fake {
+            log: Rc::clone(&log),
         };
         let app = IosApp::new(
             audio,
@@ -235,32 +318,153 @@ mod tests {
             Messages::english(),
             session,
         );
-        (app, tx)
+        (app, tx, log)
+    }
+
+    /// The transport button, as the view presses it.
+    fn press(app: &mut IosApp<Fake>, now: Instant) {
+        let ui = &mut app.shell.ctl.ui;
+        ui.playing = !ui.playing;
+        app.toggled(now);
+    }
+
+    /// Takes what was logged so far.
+    fn taken(log: &Log) -> Vec<&'static str> {
+        std::mem::take(&mut *log.borrow_mut())
+    }
+
+    /// An app playing since `t0`, the log emptied.
+    fn playing(t0: Instant) -> (IosApp<Fake>, Sender<SessionEvent>, Log) {
+        let (mut app, tx, log) = app();
+        press(&mut app, t0);
+        tx.send(SessionEvent::Activated(true)).unwrap();
+        app.logic_at(t0);
+        assert!(app.shell.ctl.ui.playing);
+        taken(&log);
+        (app, tx, log)
     }
 
     #[test]
     fn ios_app_hides_mac_only_parts() {
-        let (app, _tx) = app(Fake::default());
+        let (app, _tx, _log) = app();
         assert!(!app.shell.ctl.ui.show_mini_button);
         assert!(!app.shell.ctl.ui.show_sessions);
         assert_eq!(app.shell.ctl.ui.mode, WindowMode::Full);
     }
 
     #[test]
-    fn interruption_stops_a_playing_app() {
-        let audio = Fake::default();
-        let sent = Rc::clone(&audio.sent);
-        let (mut app, tx) = app(audio);
-        let ctx = egui::Context::default();
-        app.shell.ctl.ui.playing = true;
-        app.shell.apply(UiAction::TogglePlay);
-        tx.send(Interruption::Began).unwrap();
-        tx.send(Interruption::Ended {
-            should_resume: true,
-        })
-        .unwrap();
-        app.logic(&ctx);
+    fn launch_activates_nothing() {
+        let (mut app, _tx, log) = app();
+        let t0 = Instant::now();
+        for n in 0..20 {
+            app.logic_at(t0 + Duration::from_millis(250) * n);
+        }
+        assert_eq!(taken(&log), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn play_activates_then_resumes_then_plays() {
+        let (mut app, tx, log) = app();
+        let t0 = Instant::now();
+        press(&mut app, t0);
+        // Held until the session is active; the button already shows it.
+        assert_eq!(taken(&log), ["activate"]);
+        assert!(app.shell.ctl.ui.playing);
+        app.logic_at(t0 + Duration::from_millis(16));
+        assert_eq!(taken(&log), Vec::<&str>::new());
+        tx.send(SessionEvent::Activated(true)).unwrap();
+        app.logic_at(t0 + Duration::from_millis(32));
+        assert_eq!(taken(&log), ["resume", "Play"]);
+        assert!(app.shell.ctl.ui.playing);
+    }
+
+    #[test]
+    fn stop_releases_after_the_tail() {
+        let t0 = Instant::now();
+        let (mut app, _tx, log) = playing(t0);
+        let t1 = t0 + Duration::from_secs(10);
+        press(&mut app, t1);
+        assert_eq!(taken(&log), ["Stop"]);
+        app.logic_at(t1 + RELEASE_AFTER / 2);
+        assert_eq!(taken(&log), Vec::<&str>::new(), "the last click rings out");
+        app.logic_at(t1 + RELEASE_AFTER);
+        assert_eq!(taken(&log), ["pause", "deactivate"]);
+        app.logic_at(t1 + RELEASE_AFTER * 4);
+        assert_eq!(taken(&log), Vec::<&str>::new());
+        // The next Play goes through the session again.
+        press(&mut app, t1 + Duration::from_secs(60));
+        assert_eq!(taken(&log), ["activate"]);
+    }
+
+    #[test]
+    fn play_again_within_the_tail_keeps_the_session() {
+        let t0 = Instant::now();
+        let (mut app, _tx, log) = playing(t0);
+        press(&mut app, t0 + Duration::from_secs(1));
+        press(&mut app, t0 + Duration::from_millis(1_200));
+        app.logic_at(t0 + Duration::from_secs(5));
+        assert_eq!(taken(&log), ["Stop", "Play"]);
+    }
+
+    #[test]
+    fn stop_while_activating_never_plays_and_deactivates() {
+        let (mut app, tx, log) = app();
+        let t0 = Instant::now();
+        press(&mut app, t0);
+        press(&mut app, t0 + Duration::from_millis(10));
         assert!(!app.shell.ctl.ui.playing);
-        assert_eq!(sent.borrow().last(), Some(&"Stop"));
+        tx.send(SessionEvent::Activated(true)).unwrap();
+        app.logic_at(t0 + Duration::from_millis(40));
+        assert_eq!(taken(&log), ["activate", "deactivate"]);
+        // A Play then waits for the session again.
+        press(&mut app, t0 + Duration::from_secs(1));
+        assert_eq!(taken(&log), ["activate"]);
+    }
+
+    #[test]
+    fn failed_activation_shows_stopped() {
+        let (mut app, tx, log) = app();
+        let t0 = Instant::now();
+        press(&mut app, t0);
+        tx.send(SessionEvent::Activated(false)).unwrap();
+        app.logic_at(t0 + Duration::from_millis(40));
+        assert!(!app.shell.ctl.ui.playing);
+        assert_eq!(taken(&log), ["activate"]);
+    }
+
+    #[test]
+    fn interruption_stops_releases_and_never_resumes() {
+        let t0 = Instant::now();
+        let (mut app, tx, log) = playing(t0);
+        tx.send(SessionEvent::Interruption(Interruption::Began))
+            .unwrap();
+        app.logic_at(t0 + Duration::from_secs(1));
+        assert!(!app.shell.ctl.ui.playing);
+        // The system already silenced the output: no tail to wait for.
+        assert_eq!(taken(&log), ["Stop", "pause", "deactivate"]);
+        tx.send(SessionEvent::Interruption(Interruption::Ended {
+            should_resume: true,
+        }))
+        .unwrap();
+        app.logic_at(t0 + Duration::from_secs(30));
+        assert!(!app.shell.ctl.ui.playing);
+        // cpal activates the session again on "should resume": undone.
+        assert_eq!(taken(&log), ["deactivate"]);
+    }
+
+    #[test]
+    fn media_reset_activates_again_only_while_held() {
+        let t0 = Instant::now();
+        let (mut app, tx, log) = playing(t0);
+        tx.send(SessionEvent::MediaReset).unwrap();
+        app.logic_at(t0 + Duration::from_millis(100));
+        assert_eq!(taken(&log), ["activate"]);
+        tx.send(SessionEvent::Activated(true)).unwrap();
+        app.logic_at(t0 + Duration::from_millis(200));
+        assert_eq!(taken(&log), Vec::<&str>::new(), "already playing");
+        let (mut app, tx, log) = self::app();
+        tx.send(SessionEvent::MediaReset).unwrap();
+        app.logic_at(t0);
+        assert_eq!(taken(&log), Vec::<&str>::new());
     }
 }
