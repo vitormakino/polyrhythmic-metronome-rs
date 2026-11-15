@@ -15,7 +15,8 @@ use cpal::ErrorKind;
 /// The data callback not called for this long is a stall.
 pub(crate) const STALL: Duration = Duration::from_secs(1);
 /// A stream resumed from a pause that has not called back since, for this
-/// long, is a stall.
+/// long, is a stall (instead of [`STALL`]: an output can take over a second
+/// to start).
 pub(crate) const RESUME_STALL: Duration = Duration::from_secs(3);
 /// No default output for this long (every tick in between) is a device
 /// change to "none". A real loss is also reported by cpal as
@@ -154,10 +155,16 @@ pub(crate) fn rebuild_reason(
     if obs.wall_jumped && !advanced && !obs.suspended {
         return Some(RebuildReason::Slept);
     }
-    // Silent only counts once the stream has run (AirPlay starts slowly),
-    // or, with a longer bound, once it was resumed from a pause.
+    // Silent only counts once the stream has run (AirPlay starts slowly).
+    // Resumed from a pause and not called back since, whether it ran before
+    // or not, it gets the longer bound: the output may be slow to start.
     let silent = obs.now.duration_since(state.seen.1);
-    if (state.resumed && silent > RESUME_STALL) || (obs.callbacks > 0 && silent > STALL) {
+    let stalled = if state.resumed {
+        silent > RESUME_STALL
+    } else {
+        obs.callbacks > 0 && silent > STALL
+    };
+    if stalled {
         return Some(RebuildReason::Stalled);
     }
     let changed = |to| RebuildReason::DeviceChanged {
@@ -364,12 +371,15 @@ mod tests {
             assert_eq!(s.step(0, Some("A"), false, None), None);
         }
         assert_eq!(s.step(0, Some("A"), true, None), None);
-        // Resumed: the paused time does not count towards a stall...
+        // Resumed, as `resume_output` does: neither the paused time nor a
+        // slow start (Bluetooth, AirPlay: over a second) is a stall...
         s.suspended = false;
-        for _ in 0..4 {
+        s.state.restart(s.callbacks, s.start + TICK * s.tick);
+        let ticks = (RESUME_STALL.as_millis() / TICK.as_millis()) as u32;
+        for _ in 0..ticks {
             assert_eq!(s.step(0, Some("A"), false, None), None);
         }
-        // ...but a resumed stream that stays silent still is one.
+        // ...but a resumed stream that stays silent past RESUME_STALL is one.
         assert_eq!(
             s.step(0, Some("A"), false, None),
             Some(RebuildReason::Stalled)
