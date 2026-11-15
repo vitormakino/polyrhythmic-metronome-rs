@@ -172,6 +172,9 @@ fn beats_mute_and_sound() {
     click(&mut h, "Pulse 2: mute");
     assert!(h.state().ui.pattern.pulses[1].enabled);
     click(&mut h, "Pulse 1: settings");
+    // The open settings reach below the list's fold.
+    h.get_by_label("Pulse 1: sound Bell").scroll_to_me();
+    h.run();
     click(&mut h, "Pulse 1: sound Bell");
     assert_eq!(h.state().ui.pattern.pulses[0].sound, SoundType::Bell);
     let changes = h

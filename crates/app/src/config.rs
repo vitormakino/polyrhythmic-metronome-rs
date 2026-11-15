@@ -1,8 +1,9 @@
 //! `config.toml` in `~/.config/polyrhythmic-metronome`, plus the Draft 4 JSON
 //! Schemas that give editors (Taplo) autocomplete for it, `locales/` and `themes/`.
 //!
-//! The app creates `config.toml` once and never writes to it again; only
-//! `schema/` is rewritten, and only when its content differs.
+//! The app creates `config.toml` once and never writes to it again, and
+//! writes the example sessions once; only `schema/` is rewritten, and only
+//! when its content differs.
 
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
@@ -14,6 +15,12 @@ use serde::Deserialize;
 
 /// First-run content of `config.toml`.
 pub const TEMPLATE: &str = include_str!("config_template.toml");
+
+/// Example sessions, written once into `sessions/` by [`create_example_sessions`].
+const EXAMPLE_SESSIONS: [(&str, &str); 2] = [
+    ("warmup.toml", include_str!("example_warmup.toml")),
+    ("muted-bars.toml", include_str!("example_muted_bars.toml")),
+];
 
 const DRAFT_4: &str = "http://json-schema.org/draft-04/schema#";
 const DIR_NAME: &str = "polyrhythmic-metronome";
@@ -176,22 +183,13 @@ pub(crate) fn pretty(value: &serde_json::Value) -> String {
 }
 
 /// Creates the folder, `config.toml` (only if absent), `locales/`, `themes/`,
-/// `sessions/` (left empty: session files are the user's) and the
-/// schemas (only when their content differs).
+/// `sessions/` and the schemas (only when their content differs).
 pub fn ensure_files(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir.join("schema"))?;
     fs::create_dir_all(dir.join("locales"))?;
     fs::create_dir_all(dir.join("themes"))?;
     fs::create_dir_all(dir.join("sessions"))?;
-    match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(dir.join("config.toml"))
-    {
-        Ok(mut f) => f.write_all(TEMPLATE.as_bytes())?,
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(e),
-    }
+    write_new(&dir.join("config.toml"), TEMPLATE)?;
     write_if_changed(
         &dir.join("schema/config.schema.json"),
         &pretty(&config_schema()),
@@ -208,6 +206,27 @@ pub fn ensure_files(dir: &Path) -> io::Result<()> {
         &dir.join("schema/session.schema.json"),
         &pretty(&crate::sessions::session_schema()),
     )
+}
+
+/// Writes the example sessions into `sessions/`, never over an existing file.
+/// The caller runs it once (see `Settings::examples_created`), so a deleted
+/// example stays deleted.
+pub fn create_example_sessions(dir: &Path) -> io::Result<()> {
+    let sessions = dir.join("sessions");
+    fs::create_dir_all(&sessions)?;
+    for (name, text) in EXAMPLE_SESSIONS {
+        write_new(&sessions.join(name), text)?;
+    }
+    Ok(())
+}
+
+/// Writes `content` to `path` unless the file already exists.
+fn write_new(path: &Path, content: &str) -> io::Result<()> {
+    match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(mut f) => f.write_all(content.as_bytes()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 fn write_if_changed(path: &Path, content: &str) -> io::Result<()> {
@@ -380,6 +399,29 @@ mod tests {
         assert_eq!(
             fs::read_to_string(t.0.join("schema/session.schema.json")).unwrap(),
             pretty(&crate::sessions::session_schema())
+        );
+    }
+
+    #[test]
+    fn example_sessions_parse_and_never_overwrite() {
+        for (name, text) in EXAMPLE_SESSIONS {
+            let stem = name.trim_end_matches(".toml");
+            let (plan, warnings) = crate::sessions::parse(text, stem).unwrap();
+            assert!(warnings.is_empty(), "{name}: {warnings:?}");
+            assert!(!plan.stages.is_empty());
+        }
+
+        let t = TempDir::new();
+        ensure_files(&t.0).unwrap();
+        fs::write(t.0.join("sessions/warmup.toml"), "name = \"Mine\"\n").unwrap();
+        create_example_sessions(&t.0).unwrap();
+        assert_eq!(
+            fs::read_to_string(t.0.join("sessions/warmup.toml")).unwrap(),
+            "name = \"Mine\"\n"
+        );
+        assert_eq!(
+            fs::read_to_string(t.0.join("sessions/muted-bars.toml")).unwrap(),
+            EXAMPLE_SESSIONS[1].1
         );
     }
 

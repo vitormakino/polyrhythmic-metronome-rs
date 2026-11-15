@@ -150,15 +150,20 @@ fn running(plan: SessionPlan, edit: impl FnOnce(&mut SessionProgress)) -> UiStat
 }
 
 #[test]
-fn no_sessions_draws_no_strip() {
+fn no_sessions_shows_selector_and_hint() {
     let h = harness(MEDIUM, UiState::default());
-    assert!(h.query_by_value("No session").is_none());
-    assert!(h.query_by_role(Role::ComboBox).is_none());
+    assert!(h.query_by_value("No session").is_some());
+    assert!(h.query_by_role(Role::ComboBox).is_some());
+    assert!(
+        h.query_by_label("Add sessions as files in sessions/")
+            .is_some()
+    );
 
     let mut state = UiState::default();
     state.sessions = vec![entry(plan("Warm-up"))].into();
     let h = harness(MEDIUM, state);
     assert!(h.query_by_value("No session").is_some());
+    assert!(h.query_by_label_contains("Add sessions").is_none());
 }
 
 #[test]

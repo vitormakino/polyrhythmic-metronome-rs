@@ -1,5 +1,6 @@
 //! What survives a restart: pattern, tempo, window mode and rects, the
-//! visual offset per output device and the selected practice session. Stored as TOML in
+//! visual offset per output device, the selected practice session and whether
+//! the example sessions were written. Stored as TOML in
 //! `dirs::data_dir()/polyrhythmic-metronome/settings.toml`.
 
 use std::collections::BTreeMap;
@@ -30,6 +31,8 @@ pub struct Settings {
     pub visual_offsets: BTreeMap<String /*device uid*/, u32 /*ms*/>,
     /// Name of the selected practice session; `None` is "No session".
     pub session: Option<String>,
+    /// The example sessions were written once; they are not written again.
+    pub examples_created: bool,
 }
 
 impl Default for Settings {
@@ -42,6 +45,7 @@ impl Default for Settings {
             mini_rect: None,
             visual_offsets: BTreeMap::new(),
             session: None,
+            examples_created: false,
         }
     }
 }
@@ -89,6 +93,7 @@ impl Settings {
             mini_rect: field(&table, "mini_rect").and_then(|r| valid_rect(r, mini::MIN_SIZE)),
             visual_offsets,
             session: field(&table, "session"),
+            examples_created: field(&table, "examples_created").unwrap_or(false),
         }
     }
 
@@ -165,6 +170,7 @@ mod tests {
                 ("BuiltInSpeakerDevice".to_owned(), 0),
             ]),
             session: Some("Warm-up".to_owned()),
+            examples_created: true,
         }
     }
 

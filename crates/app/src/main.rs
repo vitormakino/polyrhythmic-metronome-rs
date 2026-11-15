@@ -166,6 +166,8 @@ impl App {
             mini_rect: self.windows.mini_rect,
             visual_offsets: self.visual_offsets.clone(),
             session: self.ctl.ui.session.clone(),
+            // Set and saved at startup, before the window opens.
+            examples_created: self.saved.examples_created,
         }
     }
 
@@ -398,31 +400,49 @@ fn spawn_ticker(ctx: egui::Context) {
     }
 }
 
-/// Creates the config folder's files and loads the language and theme, before the
+/// Creates the config folder's files (and the example sessions, when
+/// `create_examples`) and loads the language, theme and sessions, before the
 /// window opens. Any problem goes to stderr and the app runs in English.
-fn load_config() -> (config_watch::Loader, Option<PathBuf>) {
+/// The last value tells whether the example sessions were written.
+fn load_config(create_examples: bool) -> (config_watch::Loader, Option<PathBuf>, bool) {
     let mut loader = config_watch::Loader::default();
     let Some(dir) = config::config_dir() else {
         eprintln!("polyrhythmic-metronome: no home folder, using the English interface");
-        return (loader, None);
+        return (loader, None, false);
     };
     if let Err(e) = config::ensure_files(&dir) {
         eprintln!("polyrhythmic-metronome: {}: {e}", dir.display());
+    }
+    let mut examples_created = false;
+    if create_examples {
+        match config::create_example_sessions(&dir) {
+            Ok(()) => examples_created = true,
+            Err(e) => eprintln!("polyrhythmic-metronome: example sessions: {e}"),
+        }
     }
     let reload = loader.reload(&config_watch::read_file, &config_watch::list_toml, &dir);
     for line in &reload.diagnostics {
         eprintln!("polyrhythmic-metronome: {line}");
     }
-    (loader, Some(dir))
+    (loader, Some(dir), examples_created)
 }
 
 fn main() -> eframe::Result {
     let settings_dir = settings::default_dir();
-    let settings = settings_dir
+    let mut settings = settings_dir
         .as_deref()
         .map(Settings::load)
         .unwrap_or_default();
-    let (loader, config_dir) = load_config();
+    let (loader, config_dir, examples_created) = load_config(!settings.examples_created);
+    if examples_created {
+        // Saved now, so a deleted example is not written again.
+        settings.examples_created = true;
+        if let Some(dir) = &settings_dir
+            && let Err(e) = settings.save(dir)
+        {
+            eprintln!("polyrhythmic-metronome: could not save settings: {e}");
+        }
+    }
     let audio = match AudioService::start(EngineInit {
         pattern: settings.pattern.clone(),
         bpm: settings.bpm,

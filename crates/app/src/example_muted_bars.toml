@@ -1,0 +1,19 @@
+#:schema ../schema/session.schema.json
+# An example session. Edit or delete it freely: the app writes the examples
+# only once. Every key is described in the schema and in the README.
+name = "Muted bars"
+
+[[stage]]
+bars = 8                                          # all bars play
+
+[[stage]]
+bars = 16
+mute = { play_bars = 4, mute_bars = 4 }           # 4 bars play, 4 are muted
+
+[[stage]]
+bars = 16
+mute = { play_bars = 2, mute_bars = 2 }           # shorter cycles
+
+[[stage]]
+bars = 16
+random_mute = { percent = 20, increase = 10, every_bars = 4, max = 50 }
