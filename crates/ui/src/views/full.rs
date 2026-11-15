@@ -10,7 +10,10 @@
 use std::time::Instant;
 
 use egui::epaint::Shadow;
-use egui::{Align2, CornerRadius, Rect, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2};
+use egui::{
+    Align2, CornerRadius, Rect, Role, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo,
+    pos2, vec2,
+};
 use pm_core::MAX_PULSES;
 
 use super::bpm_card::bpm_card;
@@ -62,7 +65,13 @@ pub fn full_view(ui: &mut Ui, state: &mut UiState, now: Instant) -> Vec<UiAction
         session_strip(ui, strip, state, &mut actions);
     }
     play_button(ui, layout.play, state, layout.wide, &mut actions);
-    footer(ui, layout.footer, state, &mut actions);
+    footer(
+        ui,
+        layout.footer,
+        (layout.play.bottom(), screen.bottom()),
+        state,
+        &mut actions,
+    );
     actions
 }
 
@@ -225,15 +234,23 @@ fn topology_card(ui: &mut Ui, rect: Rect, state: &UiState) {
     let short = rect.width() > rect.height() * 1.2;
     if rect.width() >= TITLE_MIN_WIDTH {
         let title_y = if short { 14.0 } else { 28.0 };
-        widgets::text(
+        let title = state.messages.topology.to_uppercase();
+        let painted = widgets::text(
             painter,
             pos2(rect.center().x, rect.top() + title_y),
             Align2::CENTER_CENTER,
-            &state.messages.topology.to_uppercase(),
+            &title,
             theme::font_mono(9.0),
             t.text_faint,
             3.6,
         );
+        // The painted title as its own node (the diagram has the plain name).
+        let node = ui.interact(
+            painted,
+            ui.make_persistent_id("topology-title"),
+            Sense::hover(),
+        );
+        node.widget_info(|| WidgetInfo::labeled(Role::Label, true, &title));
         inner = if short {
             Rect::from_min_max(pos2(rect.left(), rect.top() + 26.0), rect.max).shrink(6.0)
         } else {

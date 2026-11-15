@@ -20,7 +20,16 @@ pub(crate) const HEIGHT: f32 = 20.0;
 /// Largest visual offset the slider allows (ms).
 pub const MAX_VISUAL_OFFSET_MS: u32 = 500;
 
-pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiAction>) {
+/// `reach` is the free band under Play (down to the window's bottom edge):
+/// the gear's hit area takes all of its height, so it grows toward 44 pt
+/// without ever covering Play.
+pub(crate) fn footer(
+    ui: &mut Ui,
+    rect: Rect,
+    reach: (f32, f32),
+    state: &mut UiState,
+    actions: &mut Vec<UiAction>,
+) {
     let painter = ui.painter().clone();
     let m = state.messages.clone();
     let t = state.theme.clone();
@@ -63,7 +72,17 @@ pub(crate) fn footer(ui: &mut Ui, rect: Rect, state: &mut UiState, actions: &mut
     let gear = Rect::from_center_size(pos2(rect.right() - 11.0, cy), Vec2::splat(22.0));
     let id = ui.make_persistent_id("app-settings");
     let open = Popup::is_id_open(ui.ctx(), id.with("popup"));
-    let resp = widgets::toggle(ui, gear, id, &m.settings, open);
+    let hit = Rect::from_min_max(
+        pos2(
+            gear.center().x - widgets::MIN_HIT / 2.0,
+            (reach.0 + 1.0).min(gear.top()),
+        ),
+        pos2(
+            gear.center().x + widgets::MIN_HIT / 2.0,
+            reach.1.max(gear.bottom()),
+        ),
+    );
+    let resp = widgets::toggle(ui, hit, id, &m.settings, open);
     if resp.hovered() || open {
         ui.painter().rect_filled(gear, 6.0, t.border);
     }
