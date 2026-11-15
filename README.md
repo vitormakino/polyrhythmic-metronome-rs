@@ -74,6 +74,9 @@ call or alarm stops it, and it stays stopped until you press Play again.
 4. On the iPhone, turn on Settings > Privacy & Security > Developer Mode. It
    appears after the phone has been connected to Xcode once, and the phone
    restarts to enable it.
+5. To install without the cable later: with the iPhone connected, open
+   Xcode > Window > Devices and Simulators, select it and turn on "Connect
+   via network". From then on the Mac reaches it over the same Wi-Fi.
 
 ### Install
 
@@ -86,13 +89,40 @@ message. On the iPhone, open Settings > General > VPN & Device Management,
 select your Apple Account under "Developer App" and trust it. Then press Run
 again.
 
+Or, without opening Xcode, from the terminal (cable or network):
+
+```sh
+tools/ios-device.sh             # first paired iPhone
+tools/ios-device.sh "My iPhone" # by name or identifier
+```
+
+It builds a Release app, signs it with your team (`-allowProvisioningUpdates`),
+installs it and opens it. Opening needs the phone unlocked; the install does
+not depend on it.
+
 ### Every 7 days
 
 Apps signed with a free account expire after 7 days and then refuse to open.
-To renew it, connect the iPhone and press Run again in Xcode. Reinstalling
-keeps the saved pattern, tempo and visual offset, as long as the bundle
-identifier in `ios/Signing.xcconfig` stays the same. Deleting the app from
-the phone erases them.
+To renew it, run `tools/ios-device.sh` again (or press Run in Xcode).
+Reinstalling keeps the saved pattern, tempo and visual offset, as long as the
+bundle identifier in `ios/Signing.xcconfig` stays the same. Deleting the app
+from the phone erases them.
+
+To renew it automatically:
+
+```sh
+tools/ios-device.sh --install-schedule  # check every day at 12:00
+tools/ios-device.sh --remove-schedule   # stop it
+```
+
+This adds a launchd agent to `~/Library/LaunchAgents`. Each day it runs
+`tools/ios-device.sh --if-due`, which reinstalls once the last install is 6
+days old, so a day before it expires. It needs the Mac awake (a missed run
+happens at the next wake), Xcode signed in to your Apple Account, and the
+iPhone reachable, usually unlocked on the same Wi-Fi. When it cannot reach
+the phone it shows a notification and tries again the next day. If Apple
+asks for something (new terms, a password), open Xcode once. The log is in
+`target/ios-device/schedule.log`.
 
 ### Simulator
 
