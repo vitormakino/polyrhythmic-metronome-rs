@@ -53,8 +53,12 @@ xcrun simctl install "$udid" "$app"
 xcrun simctl launch "$udid" "$bundle_id"
 sleep 5
 
-xcrun simctl io "$udid" screenshot "$out/screen.png" >/dev/null 2>&1
-echo "screenshot: $out/screen.png"
+# A failed screenshot is not a failed app: warn and still check that it runs.
+if xcrun simctl io "$udid" screenshot "$out/screen.png" >/dev/null 2>&1; then
+  echo "screenshot: $out/screen.png"
+else
+  echo "warning: no screenshot taken" >&2
+fi
 
 # A running app has a UIKitApplication job with a pid in launchd.
 if xcrun simctl spawn "$udid" launchctl list \

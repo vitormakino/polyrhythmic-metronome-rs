@@ -111,10 +111,27 @@ down at the end.
 The Mac app runs on eframe. Its window layer, winit, has no support for
 UIScene, which iOS 27 requires, so the iPhone app uses a small host of its own
 (`crates/ios_host`: UIKit scene, Metal, touches). Once winit supports UIScene
-([rust-windowing/winit#4723](https://github.com/rust-windowing/winit/issues/4723))
-and eframe picks that up, change `pm_ios_main` in `crates/ios/src/lib.rs` to
-run the app through `pm_shell::EframeHost` instead of `pm_ios_host::run`, and
-delete `crates/ios_host`.
+([rust-windowing/winit#4723](https://github.com/rust-windowing/winit/pull/4723))
+and eframe picks that up:
+
+1. In `crates/ios/src/lib.rs`, make `pm_ios_main` run the app through
+   `pm_shell::EframeHost` (`eframe::run_native`) instead of
+   `pm_ios_host::run`.
+2. In `crates/ios/Cargo.toml`, drop the `polyrhythmic-metronome-ios-host`
+   dependency, enable the `eframe` feature of `polyrhythmic-metronome-shell`
+   and add `eframe`.
+3. Give the eframe path what the iOS host does today: `EframeHost` never
+   calls `AppShell::on_background` and nothing wakes `logic` off screen. Call
+   `on_background` when the app is suspended (settings are saved then) and
+   run a background ticker that asks for a repaint every `pm_shell::TICK`,
+   like the Mac app's `ui-tick` thread, so the audio service keeps following
+   the output while the screen is off.
+4. In `ios/Info.plist`, set `UISceneDelegateClassName` to the scene delegate
+   winit documents, or remove it if winit installs its own.
+5. Delete `crates/ios_host`, remove it from `members` in the root
+   `Cargo.toml`, drop `-p polyrhythmic-metronome-ios-host` from the `ios` job
+   in `.github/workflows/ci.yml`, and remove its row from the project layout
+   table below.
 
 ## Using it
 

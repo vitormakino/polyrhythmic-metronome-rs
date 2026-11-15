@@ -481,9 +481,10 @@ Build Configuration: Release).
 
 1. **Touch** (check this first). Tap −/+, TAP, PLAY, the pulse card buttons
    and the gear; drag the tempo slider; drag a pulse card by its handle to
-   reorder it. Expected: each tap acts once, where the finger is; a scroll or
-   a drag that leaves a button does not press it; the slider and the reorder
-   follow the finger.
+   reorder it. Then tap + and TAP very quickly, several times a second.
+   Expected: each tap acts once, where the finger is, quick taps included
+   (none lost, none doubled); a scroll or a drag that leaves a button does
+   not press it; the slider and the reorder follow the finger.
 2. **Sound and timing.** Play 4 against 3 at 120 BPM, then at 200 BPM, for a
    few minutes each. Expected: steady clicks, the accent on the "one", no
    gaps, doubled clicks or drift, and the flashes in time with the sound.
@@ -499,8 +500,14 @@ Build Configuration: Release).
 6. **Call or alarm.** While playing, receive a call (or let a timer or alarm
    go off) and dismiss it. Expected: playback stops when it starts, the
    button shows PLAY, and it does not resume by itself afterwards. Pressing
-   PLAY plays again.
-7. **Saved state.** Change the pattern (add a pulse, change a beat count) and
+   PLAY plays again, and no audio error is left in the footer after the
+   call.
+7. **Long background.** Press PLAY, go to the home screen (or lock the
+   screen) and leave it playing for 10 minutes or more, then return to the
+   app. iOS may disconnect the app's scene meanwhile and connect a new one on
+   return. Expected: the clicks never stop, the view comes back drawn (not
+   blank), in time, with nothing lit from before.
+8. **Saved state.** Change the pattern (add a pulse, change a beat count) and
    the BPM, go to the home screen, close the app from the app switcher and
    open it again. Expected: the same pattern and BPM. Then reinstall from
    Xcode (Run) and open it: still the same.
