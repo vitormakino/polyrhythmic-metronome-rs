@@ -137,6 +137,8 @@ pub struct Shell<A: Audio = AudioService> {
     pending: (Settings, Instant),
     last_tick: Instant,
     last_frame: Instant,
+    /// Whether the app was on screen at the last `logic` or `view`.
+    visible: bool,
 }
 
 impl<A: Audio + Device> Shell<A> {
@@ -171,6 +173,7 @@ impl<A: Audio + Device> Shell<A> {
             pending: (settings.clone(), now),
             last_tick: now,
             last_frame: now,
+            visible: true,
         };
         shell.sync_device();
         shell
@@ -180,8 +183,10 @@ impl<A: Audio + Device> Shell<A> {
     /// screen (`visible` false): ticks the service when due, drains the beat
     /// events (lighting them only when `visible`: nothing advances while
     /// hidden, so no backlog is kept), follows the session, sends what
-    /// waits and saves the settings once they settle.
+    /// waits and saves the settings once they settle. Back on screen,
+    /// nothing lit from before the app was hidden flashes at once.
     pub fn logic(&mut self, now: Instant, visible: bool) {
+        self.set_visible(visible);
         if tick_due(&mut self.last_tick, now) {
             self.audio.tick();
             self.sync_device();
@@ -204,15 +209,18 @@ impl<A: Audio + Device> Shell<A> {
     }
 
     /// One frame: advances the animations, runs `draw` (a view) and handles
-    /// its actions. Returns the ones that concern the host (today
-    /// [`UiAction::ToggleMini`]), in order. Asks for the next frame while
-    /// playing or animating.
+    /// its actions in order, the shell's first. Returns, in their order, the
+    /// ones that concern the host (today [`UiAction::ToggleMini`]), for it to
+    /// handle after all of the shell's. A frame means the app is on screen
+    /// (see [`logic`](Self::logic)). Asks for the next frame while playing
+    /// or animating.
     pub fn view(
         &mut self,
         ui: &mut egui::Ui,
         now: Instant,
         draw: impl FnOnce(&mut egui::Ui, &mut UiState, Instant) -> Vec<UiAction>,
     ) -> Vec<UiAction> {
+        self.set_visible(true);
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
         self.ctl.ui.advance(now, dt);
@@ -243,6 +251,15 @@ impl<A: Audio + Device> Shell<A> {
             other => self.ctl.apply(&mut self.audio, other),
         }
         None
+    }
+
+    /// Clears the beats lit before the app was hidden when it comes back on
+    /// screen.
+    fn set_visible(&mut self, visible: bool) {
+        if visible && !self.visible {
+            self.ctl.ui.clear_beats();
+        }
+        self.visible = visible;
     }
 
     /// The host's windows as they are now, saved with the settings.
@@ -313,8 +330,9 @@ impl<A: Audio + Device> Shell<A> {
 /// The visual offset for `device`: the one the user set for it, else the
 /// part of its latency that the beat events' times do not include yet (at
 /// most the slider's maximum). cpal's `playback` time, which stamps the
-/// events, already counts the buffer, device latency and safety offset;
-/// only the stream latency is left (see [`pm_audio::OutputLatency`]).
+/// events, already counts the buffer and the device's latency; only
+/// [`OutputLatency::stream`](pm_audio::OutputLatency::stream) is left (zero
+/// on iOS; see [`pm_audio::OutputLatency`]).
 fn visual_offset_for(device: &DeviceInfo, saved: &BTreeMap<String, u32>) -> Duration {
     match saved.get(&device.uid) {
         Some(&ms) => Duration::from_millis(u64::from(ms)),
@@ -454,6 +472,40 @@ mod tests {
         assert!(s.audio.events.is_empty());
         s.ctl.ui.advance(now, 0.016);
         assert_eq!(s.ctl.ui.active_beat(pulse), Some(2));
+    }
+
+    #[test]
+    fn beats_lit_before_hiding_are_cleared_on_return() {
+        let now = Instant::now();
+        let mut s = with_two_beats(now);
+        let pulse = s.ctl.ui.pattern.pulses[0].id;
+        s.logic(now, true);
+        s.ctl.ui.advance(now, 0.016);
+        assert_eq!(s.ctl.ui.active_beat(pulse), Some(2), "lit");
+        s.logic(now, false);
+        s.logic(now, true);
+        s.ctl.ui.advance(now, 0.016);
+        assert_eq!(s.ctl.ui.active_beat(pulse), None);
+        assert_eq!(s.ctl.ui.pending_beats(), 0);
+        assert_eq!(s.ctl.ui.flash(pulse), 0.0);
+    }
+
+    #[test]
+    fn a_frame_after_hidden_logic_clears_the_beats() {
+        // A host may draw before its next `logic` says it is visible (the
+        // Mac shows its window from `logic`, after the shell's).
+        let now = Instant::now();
+        let mut s = with_two_beats(now);
+        let pulse = s.ctl.ui.pattern.pulses[0].id;
+        s.logic(now, true);
+        s.ctl.ui.advance(now, 0.016);
+        s.logic(now, false);
+        let mut lit = None;
+        view_once(&mut s, |_, ui, _| {
+            lit = ui.active_beat(pulse);
+            Vec::new()
+        });
+        assert_eq!(lit, None);
     }
 
     /// Runs `view` once in a bare egui pass with `draw` as the view.

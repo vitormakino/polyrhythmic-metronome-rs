@@ -28,7 +28,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Instant;
 
 use eframe::egui::{self, Sense, ViewportCommand};
-use pm_audio::{AudioService, EngineInit};
+use pm_audio::AudioService;
 
 // Debug builds abort on an allocation inside the audio callback (the
 // `assert_no_alloc` guard in `pm_audio`'s data callback); release builds use
@@ -36,7 +36,7 @@ use pm_audio::{AudioService, EngineInit};
 #[cfg(debug_assertions)]
 #[global_allocator]
 static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
-use pm_shell::{AppShell, EframeHost, Settings, Shell, TICK, WindowSettings, settings};
+use pm_shell::{AppShell, EframeHost, Settings, Shell, TICK, WindowSettings};
 use pm_ui::state::{UiAction, UiState, WindowMode};
 use pm_ui::theme;
 use pm_ui::views::{full::full_view, mini::mini_view};
@@ -139,10 +139,6 @@ impl App {
     /// Shows the window in `mode`. The full window also takes focus; the
     /// mini one floats on top without taking it from the app in use.
     fn show(&mut self, ctx: &egui::Context, mode: WindowMode, now: Instant) {
-        if self.windows.hidden() {
-            // Nothing lit from before it was hidden flashes at once.
-            self.shell.ctl.ui.clear_beats();
-        }
         for command in self.windows.show(mode == WindowMode::Full) {
             ctx.send_viewport_cmd(command);
         }
@@ -291,11 +287,7 @@ fn load_config(create_examples: bool) -> (config_watch::Loader, Option<PathBuf>,
 }
 
 fn main() -> eframe::Result {
-    let settings_dir = settings::default_dir();
-    let mut settings = settings_dir
-        .as_deref()
-        .map(Settings::load)
-        .unwrap_or_default();
+    let (settings_dir, mut settings) = pm_shell::load_settings();
     let (loader, config_dir, examples_created) = load_config(!settings.examples_created);
     if examples_created {
         // Saved now, so a deleted example is not written again.
@@ -306,18 +298,7 @@ fn main() -> eframe::Result {
             eprintln!("polyrhythmic-metronome: could not save settings: {e}");
         }
     }
-    let audio = match AudioService::start(EngineInit {
-        pattern: settings.pattern.clone(),
-        bpm: settings.bpm,
-        resume: None,
-        session: None,
-    }) {
-        Ok(audio) => audio,
-        Err(e) => {
-            eprintln!("polyrhythmic-metronome: {e}");
-            std::process::exit(1);
-        }
-    };
+    let audio = pm_shell::start_audio(&settings);
     let viewport = Windows::new(settings.mode, settings.full_rect, settings.mini_rect).viewport();
     let options = eframe::NativeOptions {
         viewport,
