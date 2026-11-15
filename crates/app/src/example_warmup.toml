@@ -1,0 +1,14 @@
+#:schema ../schema/session.schema.json
+# An example session. Edit or delete it freely: the app writes the examples
+# only once. Every key is described in the schema and in the README.
+name = "Warm-up"
+
+[[stage]]
+bars = 8                                          # your tempo, to settle in
+
+[[stage]]
+bars = 32
+tempo = { change = 2, every_bars = 4, max = 160 } # +2 BPM every 4 bars, up to 160
+
+[[stage]]
+bars = 16                                         # hold the tempo you reached

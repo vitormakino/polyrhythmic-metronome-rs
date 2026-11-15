@@ -132,8 +132,9 @@ warning when that name is the selected theme), and `theme = "omarchy"` uses
 
 A session is a plan of stages for practice: a stage can jump or ramp the tempo,
 mute bars on a cycle or at random, and turn single pulses off. Each session is
-a file in `sessions/` (for example `sessions/warmup.toml`); the app creates the
-folder but never writes a session file. Start the file with
+a file in `sessions/` (for example `sessions/warmup.toml`). On its first start
+the app writes two examples there, `warmup.toml` and `muted-bars.toml`; edit or
+delete them freely, they are not written again. Start the file with
 `#:schema ../schema/session.schema.json`. The file name (letters, digits, `_`
 and `-`) is the default name of the session.
 
@@ -174,7 +175,8 @@ valid version (or is not listed if it never was valid) and its file, line and
 problem go to stderr; an edit takes effect the next time the session starts,
 never in one that is running.
 
-Pick a session in the list above the pulses and press Play (the button, the
+Pick a session in the list above Play (with no session files it shows where
+to add them) and press Play (the button, the
 menu bar item or the hotkey): it starts on the "one". While it runs, the
 screen shows the session's tempo, and the tempo controls and the menu bar's
 BPM items move it by the same amount they would move your own. A session never

@@ -458,4 +458,10 @@ the README's example saved as `sessions/warmup.toml`:
    button, the session included; on Stop the tempo goes back to the base.
    Quit and reopen: the session is still selected.
 
+6. Examples. With an empty `sessions/` and a settings file without
+   `examples_created` (or none), start the app. Expected: `warmup.toml` and
+   `muted-bars.toml` appear in `sessions/` and in the list. Delete one and
+   restart: it is not written again. With no session files the strip shows
+   "No session" and the hint on where to add them.
+
 Record the result here: date, macOS version, editor, what differed.
