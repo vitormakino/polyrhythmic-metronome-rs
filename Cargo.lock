@@ -2091,6 +2091,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
 ]
@@ -2361,6 +2362,7 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
 ]
 
 [[package]]
@@ -2632,6 +2634,7 @@ dependencies = [
  "notify-debouncer-mini",
  "polyrhythmic-metronome-audio",
  "polyrhythmic-metronome-core",
+ "polyrhythmic-metronome-shell",
  "polyrhythmic-metronome-ui",
  "schemars",
  "serde",
@@ -2646,8 +2649,10 @@ version = "0.1.0"
 dependencies = [
  "assert_no_alloc",
  "cpal",
+ "objc2-avf-audio",
  "objc2-core-audio",
  "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
  "polyrhythmic-metronome-core",
  "rtrb",
 ]
@@ -2659,6 +2664,52 @@ dependencies = [
  "assert_no_alloc",
  "proptest",
  "serde",
+]
+
+[[package]]
+name = "polyrhythmic-metronome-ios"
+version = "0.1.0"
+dependencies = [
+ "assert_no_alloc",
+ "block2 0.6.2",
+ "dispatch2",
+ "egui",
+ "objc2 0.6.5",
+ "objc2-avf-audio",
+ "objc2-foundation 0.3.2",
+ "polyrhythmic-metronome-audio",
+ "polyrhythmic-metronome-core",
+ "polyrhythmic-metronome-ios-host",
+ "polyrhythmic-metronome-shell",
+ "polyrhythmic-metronome-ui",
+]
+
+[[package]]
+name = "polyrhythmic-metronome-ios-host"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui-wgpu",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
+ "objc2-ui-kit 0.3.2",
+ "pollster",
+ "polyrhythmic-metronome-shell",
+]
+
+[[package]]
+name = "polyrhythmic-metronome-shell"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "eframe",
+ "egui",
+ "polyrhythmic-metronome-audio",
+ "polyrhythmic-metronome-core",
+ "polyrhythmic-metronome-ui",
+ "serde",
+ "toml",
 ]
 
 [[package]]

@@ -1,0 +1,38 @@
+[package]
+name = "polyrhythmic-metronome-ios"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "iPhone polyrhythmic metronome: entry point, audio session and the iOS app around pm_shell."
+
+[lib]
+name = "pm_ios"
+# The static library is what the Xcode project links; the rlib lets the
+# tests build on macOS.
+crate-type = ["staticlib", "rlib"]
+
+[lints.rust]
+unsafe_code = "allow" # AVAudioSession / Foundation FFI and the C entry point
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+polyrhythmic-metronome-core = { path = "../core" }
+polyrhythmic-metronome-audio = { path = "../audio" }
+polyrhythmic-metronome-ui = { path = "../ui" }
+polyrhythmic-metronome-shell = { path = "../shell" }
+egui.workspace = true
+# Debug builds check the audio callback with it (see `lib.rs`).
+assert_no_alloc.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+polyrhythmic-metronome-ios-host = { path = "../ios_host" }
+block2 = "0.6.2"
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
+objc2 = "0.6.5"
+objc2-avf-audio = { workspace = true, features = ["block2"] }
+objc2-foundation = { workspace = true, features = ["block2", "NSDictionary", "NSError", "NSLocale", "NSNotification", "NSOperation", "NSValue"] }

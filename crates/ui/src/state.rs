@@ -111,6 +111,10 @@ pub struct UiState {
     /// While it plays, and with its summary, the views describe it rather
     /// than the selected entry, whose file may have changed or gone since.
     pub running_plan: Option<SessionEntry>,
+    /// Show the pin-to-mini button in the tempo card (off where there is no mini window).
+    pub show_mini_button: bool,
+    /// Show the session strip in the full window (off where sessions are not offered).
+    pub show_sessions: bool,
 }
 
 impl Default for UiState {
@@ -138,6 +142,8 @@ impl Default for UiState {
             session_progress: None,
             session_summary: None,
             running_plan: None,
+            show_mini_button: true,
+            show_sessions: true,
         }
     }
 }

@@ -7,14 +7,14 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use eframe::egui::Vec2;
+use egui::Vec2;
 use pm_core::{Bpm, Pattern};
 use pm_ui::state::WindowMode;
 use pm_ui::views::footer::MAX_VISUAL_OFFSET_MS;
 use pm_ui::views::mini;
 use serde::Serialize;
 
-use crate::windows::FULL_MIN_SIZE;
+use pm_ui::views::full::MIN_SIZE as FULL_MIN_SIZE;
 
 const FILE: &str = "settings.toml";
 
@@ -188,6 +188,19 @@ mod tests {
         assert_eq!(names, vec![std::ffi::OsString::from(FILE)]);
     }
 
+    /// What must come back after a restart or a reinstall over the same
+    /// data folder, whatever the platform.
+    #[test]
+    fn settings_round_trip_keeps_pattern_bpm_offsets() {
+        let dir = TempDir::new();
+        let s = edited();
+        s.save(&dir.0).unwrap();
+        let loaded = Settings::load(&dir.0);
+        assert_eq!(loaded.pattern, s.pattern);
+        assert_eq!(loaded.bpm, s.bpm);
+        assert_eq!(loaded.visual_offsets, s.visual_offsets);
+    }
+
     #[test]
     fn session_selection_roundtrips() {
         let dir = TempDir::new();
@@ -276,7 +289,7 @@ mod tests {
         assert_eq!(s.visual_offsets.get("b"), None, "not a u32: dropped");
         assert_eq!(s.visual_offsets.get("c"), Some(&40));
         // Too small for the full window: grown to its minimum size.
-        assert_eq!(s.full_rect, Some([0.0, 0.0, 420.0, 640.0]));
+        assert_eq!(s.full_rect, Some([0.0, 0.0, 375.0, 640.0]));
         assert_eq!(s.mini_rect, None, "non-finite rect dropped");
 
         write(&dir.0, "bpm = 3\n");

@@ -12,6 +12,15 @@ use egui::{
 
 use crate::theme::Theme;
 
+/// Smallest touch target (pt) of an icon button, per Apple's guidelines.
+pub const MIN_HIT: f32 = 44.0;
+
+/// `rect` grown, around its center, to at least [`MIN_HIT`] on each side.
+/// Icon buttons hit-test with this and paint in the original rect.
+pub(crate) fn hit_area(rect: Rect) -> Rect {
+    Rect::from_center_size(rect.center(), rect.size().max(Vec2::splat(MIN_HIT)))
+}
+
 /// `idle` normally, the theme's hot text color while hovered.
 pub(crate) fn idle_color(theme: &Theme, resp: &Response, idle: Color32) -> Color32 {
     if resp.hovered() { theme.text_hot } else { idle }

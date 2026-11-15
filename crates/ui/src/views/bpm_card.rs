@@ -49,7 +49,7 @@ pub(crate) fn bpm_card(
     let tap_rect = Rect::from_center_size(pos2(inner.right() - 24.0, header_y), vec2(48.0, 22.0));
     let tap = widgets::button(
         ui,
-        tap_rect,
+        widgets::hit_area(tap_rect),
         ui.make_persistent_id("tap"),
         &state.messages.tap,
         true,
@@ -82,28 +82,30 @@ pub(crate) fn bpm_card(
         pos2(tap_rect.left() - 8.0 - 13.0, header_y),
         Vec2::splat(26.0),
     );
-    let pin = widgets::button(
-        ui,
-        pin_rect,
-        ui.make_persistent_id("mini"),
-        &state.messages.pin_mini,
-        true,
-    );
-    if pin.hovered() {
-        painter.rect_filled(pin_rect, 6.0, t.border);
-    }
-    widgets::mini_window(
-        &painter,
-        pin_rect.center(),
-        16.0,
-        widgets::idle_color(&t, &pin, t.text_muted),
-    );
-    if pin.clicked() {
-        state.mode = match state.mode {
-            WindowMode::Full => WindowMode::Mini,
-            WindowMode::Mini => WindowMode::Full,
-        };
-        actions.push(UiAction::ToggleMini);
+    if state.show_mini_button {
+        let pin = widgets::button(
+            ui,
+            pin_rect,
+            ui.make_persistent_id("mini"),
+            &state.messages.pin_mini,
+            true,
+        );
+        if pin.hovered() {
+            painter.rect_filled(pin_rect, 6.0, t.border);
+        }
+        widgets::mini_window(
+            &painter,
+            pin_rect.center(),
+            16.0,
+            widgets::idle_color(&t, &pin, t.text_muted),
+        );
+        if pin.clicked() {
+            state.mode = match state.mode {
+                WindowMode::Full => WindowMode::Mini,
+                WindowMode::Mini => WindowMode::Full,
+            };
+            actions.push(UiAction::ToggleMini);
+        }
     }
 
     // Big number between - and +.
@@ -178,7 +180,7 @@ pub(super) fn bpm_stepper(
         let r = Rect::from_center_size(c, Vec2::splat(step));
         let resp = widgets::button(
             ui,
-            r,
+            widgets::hit_area(r),
             ui.make_persistent_id(("bpm-step", delta)),
             label,
             true,

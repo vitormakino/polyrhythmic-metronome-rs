@@ -6,3 +6,10 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+
+  # Version updates for the Rust crates (security updates come regardless).
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5

@@ -20,6 +20,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine::{Engine, EngineHandle, EngineInit};
 use crate::messages::{Command, PositionSnapshot};
+use crate::platform::{output_identity, query_output_latency};
 use crate::session::SessionReader;
 use crate::watch::{self, Observation, RebuildCounts, RebuildReason, WatchState};
 
@@ -49,26 +50,33 @@ pub struct DeviceInfo {
     pub latency: OutputLatency,
 }
 
-/// Output latency of a device, as CoreAudio reports it.
+/// Output latency of a device, as the platform reports it.
 ///
-/// cpal 0.18.2 already puts the device's buffer size, `device_and_safety`
-/// and nothing else into `OutputCallbackInfo::timestamp().playback` (see
-/// `cpal::host::coreaudio::macos::device`, `build_output_stream_raw`: the
-/// render callback adds `device_buffer_frames + kAudioDevicePropertyLatency
-/// + kAudioDevicePropertySafetyOffset` to the callback time), and the engine
-/// stamps beat events with that `playback` time. Only `stream` is missing
-/// from the events' times: [`uncompensated`](Self::uncompensated).
+/// The engine stamps beat events with cpal 0.18.2's
+/// `OutputCallbackInfo::timestamp().playback`, which already counts
+/// `device_and_safety`; only `stream` is missing from the events' times:
+/// [`uncompensated`](Self::uncompensated).
+///
+/// - macOS: cpal adds the device's buffer size, `kAudioDevicePropertyLatency`
+///   and `kAudioDevicePropertySafetyOffset` to the callback time
+///   (`cpal::host::coreaudio::macos::device`, `build_output_stream_raw`);
+///   `stream` is `kAudioStreamPropertyLatency`, which cpal leaves out.
+/// - iOS: cpal adds the IO buffer and `AVAudioSession.outputLatency`
+///   (`cpal::host::coreaudio::ios`, `output_latency_frames`); both are in
+///   `device_and_safety` and `stream` is zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OutputLatency {
-    /// `kAudioDevicePropertyLatency` + `kAudioDevicePropertySafetyOffset`
-    /// (output scope).
+    /// What cpal counts in `playback`. macOS:
+    /// `kAudioDevicePropertyLatency` plus `kAudioDevicePropertySafetyOffset`
+    /// (output scope). iOS: `outputLatency` plus `IOBufferDuration`.
     pub device_and_safety: Duration,
-    /// `kAudioStreamPropertyLatency` of the first output stream.
+    /// What cpal leaves out. macOS: `kAudioStreamPropertyLatency` of the
+    /// first output stream. iOS: zero.
     pub stream: Duration,
 }
 
 impl OutputLatency {
-    /// Everything CoreAudio reports.
+    /// Everything the platform reports.
     pub fn total(&self) -> Duration {
         self.device_and_safety + self.stream
     }
@@ -543,8 +551,8 @@ impl AudioService {
         let default_uid = self
             .host
             .default_output_device()
-            .and_then(|d| d.id().ok())
-            .map(|id| id.id().to_owned());
+            .and_then(|d| output_identity(&d).ok())
+            .map(|(uid, _)| uid);
         let reason = match &mut self.live {
             Some(live) => watch::rebuild_reason(
                 &mut live.watch,
@@ -661,10 +669,7 @@ fn open(
     let Some(device) = host.default_output_device() else {
         return Ok(None);
     };
-    let uid = device.id()?.id().to_owned();
-    let name = device
-        .description()
-        .map_or_else(|_| uid.clone(), |d| d.name().to_owned());
+    let (uid, name) = output_identity(&device)?;
     let supported = device.default_output_config()?;
     let sample_rate = supported.sample_rate();
     let channels = supported.channels();
@@ -800,128 +805,6 @@ impl Callback {
         }
         self.callbacks.fetch_add(1, Ordering::Relaxed);
     }
-}
-
-/// Output latency of the device with CoreAudio UID `device_uid`:
-/// `kAudioDevicePropertyLatency` + `kAudioDevicePropertySafetyOffset` (output
-/// scope) and `kAudioStreamPropertyLatency` of its first output stream, in
-/// frames at the device's nominal sample rate. `None` if the device is not
-/// found or a query fails. The only `unsafe` code in the workspace.
-pub fn query_output_latency(device_uid: &str) -> Option<OutputLatency> {
-    use std::ffi::c_void;
-    use std::ptr::{self, NonNull};
-
-    use objc2_core_audio::{
-        AudioObjectGetPropertyData, AudioObjectID, AudioObjectPropertyAddress,
-        AudioObjectPropertyScope, AudioObjectPropertySelector, kAudioDevicePropertyLatency,
-        kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertySafetyOffset,
-        kAudioDevicePropertyStreams, kAudioHardwarePropertyTranslateUIDToDevice,
-        kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal,
-        kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject, kAudioObjectUnknown,
-        kAudioStreamPropertyLatency,
-    };
-    use objc2_core_foundation::CFString;
-
-    /// Reads a property into `out`; returns the bytes written.
-    fn get(
-        object: AudioObjectID,
-        selector: AudioObjectPropertySelector,
-        scope: AudioObjectPropertyScope,
-        qualifier: Option<&CFString>,
-        out: NonNull<c_void>,
-        capacity: u32,
-    ) -> Option<u32> {
-        let address = AudioObjectPropertyAddress {
-            mSelector: selector,
-            mScope: scope,
-            mElement: kAudioObjectPropertyElementMain,
-        };
-        let qualifier_ref: *const CFString = qualifier.map_or(ptr::null(), ptr::from_ref);
-        let (qualifier_size, qualifier_data) = if qualifier.is_some() {
-            (
-                size_of::<*const CFString>() as u32,
-                ptr::from_ref(&qualifier_ref).cast::<c_void>(),
-            )
-        } else {
-            (0, ptr::null())
-        };
-        let mut size = capacity;
-        // SAFETY: `address` and `size` live across the call, `out` points to
-        // `capacity` writable bytes (the caller's local), and the qualifier
-        // is null or a pointer to a live CFStringRef, as
-        // kAudioHardwarePropertyTranslateUIDToDevice expects.
-        let status = unsafe {
-            AudioObjectGetPropertyData(
-                object,
-                NonNull::from(&address),
-                qualifier_size,
-                qualifier_data,
-                NonNull::from(&mut size),
-                out,
-            )
-        };
-        (status == 0).then_some(size)
-    }
-    let u32_of = |object, selector, scope, qualifier| {
-        let mut v: u32 = 0;
-        let n = get(
-            object,
-            selector,
-            scope,
-            qualifier,
-            NonNull::from(&mut v).cast(),
-            size_of::<u32>() as u32,
-        )?;
-        (n == size_of::<u32>() as u32).then_some(v)
-    };
-
-    let uid = CFString::from_str(device_uid);
-    let device = u32_of(
-        kAudioObjectSystemObject as AudioObjectID,
-        kAudioHardwarePropertyTranslateUIDToDevice,
-        kAudioObjectPropertyScopeGlobal,
-        Some(&uid),
-    )
-    .filter(|&id| id != kAudioObjectUnknown)?;
-    let output = kAudioObjectPropertyScopeOutput;
-    let device_latency = u32_of(device, kAudioDevicePropertyLatency, output, None)?;
-    let safety_offset = u32_of(device, kAudioDevicePropertySafetyOffset, output, None)?;
-    let mut streams = [0 as AudioObjectID; 16];
-    let bytes = get(
-        device,
-        kAudioDevicePropertyStreams,
-        output,
-        None,
-        NonNull::from(&mut streams).cast(),
-        size_of_val(&streams) as u32,
-    )?;
-    let stream_latency = if bytes >= size_of::<AudioObjectID>() as u32 {
-        u32_of(
-            streams[0],
-            kAudioStreamPropertyLatency,
-            kAudioObjectPropertyScopeGlobal,
-            None,
-        )?
-    } else {
-        0
-    };
-    let mut rate: f64 = 0.0;
-    let n = get(
-        device,
-        kAudioDevicePropertyNominalSampleRate,
-        kAudioObjectPropertyScopeGlobal,
-        None,
-        NonNull::from(&mut rate).cast(),
-        size_of::<f64>() as u32,
-    )?;
-    if n != size_of::<f64>() as u32 || !rate.is_finite() || rate <= 0.0 {
-        return None;
-    }
-    let seconds = |frames: f64| Duration::from_secs_f64(frames / rate);
-    Some(OutputLatency {
-        device_and_safety: seconds(f64::from(device_latency) + f64::from(safety_offset)),
-        stream: seconds(f64::from(stream_latency)),
-    })
 }
 
 #[cfg(test)]

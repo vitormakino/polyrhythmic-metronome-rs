@@ -1,0 +1,25 @@
+//! The polyrhythmic metronome without its operating system: the frame loop
+//! (audio ticks, beat events, device and visual offset following, action
+//! handling, delayed settings saving) in [`Shell`], the engine commands in
+//! [`controller`], the saved [`settings`] and the hosts' common startup
+//! ([`load_settings`], [`start_audio`]).
+//!
+//! A host drives an [`AppShell`]: the Mac app through [`EframeHost`] (feature
+//! `eframe`), the iPhone app through its own bridge. Each host's app holds a
+//! [`Shell`] and adds what only its platform has (menu bar item, hotkeys and
+//! windows on the Mac).
+
+pub mod controller;
+pub mod settings;
+mod shell;
+mod startup;
+
+#[cfg(feature = "eframe")]
+mod eframe_host;
+
+pub use controller::{Audio, Controller};
+#[cfg(feature = "eframe")]
+pub use eframe_host::EframeHost;
+pub use settings::Settings;
+pub use shell::{AppShell, Device, Shell, TICK, WindowSettings};
+pub use startup::{load_settings, start_audio};

@@ -12,7 +12,8 @@ use pm_ui::state::{PENDING_BEATS_CAP, UiAction, UiState};
 use pm_ui::theme::{self, Theme};
 use pm_ui::views::full::full_view;
 
-const MIN: Vec2 = Vec2::new(420.0, 640.0);
+const MIN: Vec2 = pm_ui::views::full::MIN_SIZE;
+const PHONE: Vec2 = Vec2::new(375.0, 640.0);
 const MEDIUM: Vec2 = Vec2::new(900.0, 700.0);
 const LARGE: Vec2 = Vec2::new(1400.0, 900.0);
 
@@ -485,6 +486,105 @@ fn snapshot_themed(
 #[test]
 fn full_min_default() {
     snapshot("full_min_default", MIN, false);
+}
+
+#[test]
+fn full_375_default() {
+    snapshot("full_375_default", PHONE, false);
+    let h = harness(PHONE, UiState::default());
+    // The painted title, not the diagram's name.
+    assert!(h.query_by_label("RHYTHMIC TOPOLOGY").is_some());
+}
+
+#[test]
+fn icon_buttons_have_44pt_hit_area() {
+    let h = harness(PHONE, UiState::default());
+    for label in [
+        "Pulse 1: settings",
+        "Pulse 1: mute",
+        "Increase BPM",
+        "Decrease BPM",
+        "Tap",
+    ] {
+        let rect = h.get_by_label(label).rect();
+        assert!(
+            rect.width() >= 44.0 && rect.height() >= 44.0,
+            "{label} hit area is {:?}",
+            rect.size()
+        );
+    }
+}
+
+#[test]
+fn remove_hit_area_is_44pt_tall_and_not_narrower_than_its_icon_slot() {
+    // Mute and remove sit 24 pt apart, so remove keeps its half of the overlap
+    // plus the room towards the card's edge.
+    let h = harness(PHONE, UiState::default());
+    let rect = h.get_by_label("Pulse 1: remove").rect();
+    assert!(
+        rect.height() >= 44.0 && rect.width() >= 34.0,
+        "{:?}",
+        rect.size()
+    );
+}
+
+#[test]
+fn footer_gear_is_44pt_wide_and_clear_of_play() {
+    let h = harness(PHONE, UiState::default());
+    let gear = h.get_by_label("Settings").rect();
+    let play = h.get_by_label("Play").rect();
+    assert!(gear.width() >= 44.0, "gear is {:?}", gear.size());
+    assert!(!gear.intersects(play), "{gear:?} overlaps {play:?}");
+}
+
+/// Clicks `y` mid-height at `x` and returns the state afterwards.
+fn click_at(h: &mut Harness<'static, App>, x: f32, y: f32) {
+    let pos = egui::pos2(x, y);
+    h.event(egui::Event::PointerMoved(pos));
+    h.run();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run();
+    }
+}
+
+#[test]
+fn neighbouring_header_icons_split_the_overlap() {
+    // Near the left edge of the trash slot's icon: trash, not mute.
+    let mut h = harness(PHONE, UiState::default());
+    let trash = h.get_by_label("Pulse 1: remove").rect();
+    click_at(&mut h, trash.left() + 2.0, trash.center().y);
+    assert_eq!(h.state().ui.pattern.pulses.len(), 1);
+
+    // Near the right edge of the mute icon: mute, not remove.
+    let mut h = harness(PHONE, UiState::default());
+    let mute = h.get_by_label("Pulse 1: mute").rect();
+    click_at(&mut h, mute.right() - 2.0, mute.center().y);
+    assert_eq!(h.state().ui.pattern.pulses.len(), 2);
+    assert!(!h.state().ui.pattern.pulses[0].enabled);
+
+    // Just inside the gear's left edge: settings; just outside: the grip, which does nothing.
+    let mut h = harness(PHONE, UiState::default());
+    let gear = h.get_by_label("Pulse 1: settings").rect();
+    click_at(&mut h, gear.left() - 2.0, gear.center().y);
+    assert!(h.query_by_label("Pulse 1: beat 1").is_none());
+    click_at(&mut h, gear.left() + 2.0, gear.center().y);
+    assert!(h.query_by_label("Pulse 1: beat 1").is_some());
+}
+
+#[test]
+fn mini_button_hidden_when_switched_off() {
+    let h = harness(MEDIUM, UiState::default());
+    assert!(h.query_by_label("Pin mini").is_some());
+    let mut state = UiState::default();
+    state.show_mini_button = false;
+    let h = harness(MEDIUM, state);
+    assert!(h.query_by_label("Pin mini").is_none());
 }
 
 #[test]

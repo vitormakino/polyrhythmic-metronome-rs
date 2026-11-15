@@ -1,0 +1,31 @@
+[package]
+name = "polyrhythmic-metronome-ios-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Minimal egui host for iOS (UIScene, Metal, CADisplayLink) that drives a pm_shell::AppShell, until winit/eframe support UIScene."
+
+[lib]
+name = "pm_ios_host"
+
+[lints.rust]
+unsafe_code = "allow" # UIKit/Metal FFI
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+polyrhythmic-metronome-shell = { path = "../shell" }
+egui.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+egui-wgpu = "0.37.0"
+pollster = "1.0.1"
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDate", "NSObject", "NSRunLoop", "NSSet", "NSString", "NSTimer"] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "objc2-quartz-core", "UIApplication", "UIEvent", "UIGeometry", "UIInterface", "UIResponder", "UIScene", "UISceneDefinitions", "UISceneOptions", "UISceneSession", "UIScreen", "UITouch", "UITraitCollection", "UIView", "UIViewController", "UIWindow", "UIWindowScene"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CADisplayLink", "CALayer", "CAMetalLayer", "objc2-metal"] }
+

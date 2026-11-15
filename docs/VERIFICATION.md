@@ -465,3 +465,52 @@ the README's example saved as `sessions/warmup.toml`:
    "No session" and the hint on where to add them.
 
 Record the result here: date, macOS version, editor, what differed.
+
+## iPhone
+
+### Touch, sound, background, interruptions, saved state
+
+Status: PENDING (owner). The agent ran the app only on the simulator
+(`tools/ios-sim.sh`): it launches, shows the full view inside the safe area
+with "Speaker" as the output, and is still running after 5 s. A simulator
+cannot check touch on glass, the silent switch, headphones or calls.
+
+Install the app on the iPhone as described in the README ("iPhone"), with a
+Release build for the timing checks (Product > Scheme > Edit Scheme > Run >
+Build Configuration: Release).
+
+1. **Touch** (check this first). Tap −/+, TAP, PLAY, the pulse card buttons
+   and the gear; drag the tempo slider; drag a pulse card by its handle to
+   reorder it. Then tap + and TAP very quickly, several times a second.
+   Expected: each tap acts once, where the finger is, quick taps included
+   (none lost, none doubled); a scroll or a drag that leaves a button does
+   not press it; the slider and the reorder follow the finger.
+2. **Sound and timing.** Play 4 against 3 at 120 BPM, then at 200 BPM, for a
+   few minutes each. Expected: steady clicks, the accent on the "one", no
+   gaps, doubled clicks or drift, and the flashes in time with the sound.
+3. **Silent switch.** Turn on silent mode (the switch or Action button) and
+   press Play. Expected: the clicks are audible.
+4. **Locked screen and other apps.** While playing, lock the screen, then
+   unlock and open another app (one that does not play audio). Expected: the
+   clicks continue without a gap in both cases. Back in the app, the view is
+   in time.
+5. **Headphones.** While playing, connect wired or Bluetooth headphones, then
+   disconnect them. Expected: the clicks move to the headphones and back to
+   the speaker, and the bar position continues; no crash.
+6. **Call or alarm.** While playing, receive a call (or let a timer or alarm
+   go off) and dismiss it. Expected: playback stops when it starts, the
+   button shows PLAY, and it does not resume by itself afterwards. Pressing
+   PLAY plays again, and no audio error is left in the footer after the
+   call.
+7. **Long background.** Press PLAY, go to the home screen (or lock the
+   screen) and leave it playing for 10 minutes or more, then return to the
+   app. iOS may disconnect the app's scene meanwhile and connect a new one on
+   return. Expected: the clicks never stop, the view comes back drawn (not
+   blank), in time, with nothing lit from before.
+8. **Saved state.** Change the pattern (add a pulse, change a beat count) and
+   the BPM, go to the home screen, close the app from the app switcher and
+   open it again. Expected: the same pattern and BPM. Then reinstall from
+   Xcode (Run) and open it: still the same.
+
+Record the result here: date, iPhone model, iOS version, headphones used,
+what differed.

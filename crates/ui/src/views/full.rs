@@ -10,23 +10,30 @@
 use std::time::Instant;
 
 use egui::epaint::Shadow;
-use egui::{Align2, CornerRadius, Rect, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2};
+use egui::{
+    Align2, CornerRadius, Rect, Role, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo,
+    pos2, vec2,
+};
 use pm_core::MAX_PULSES;
 
 use super::bpm_card::bpm_card;
 use super::footer::{self, footer};
 use super::pulse_card::{Grid, pulse_list};
 use super::session_strip::{self, session_strip};
-use super::topology::topology;
+use super::topology::topology_in;
 use super::widgets;
 use crate::state::{UiAction, UiState};
 use crate::theme;
 
+/// Smallest full window (pt): an iPhone's width.
+pub const MIN_SIZE: Vec2 = Vec2::new(375.0, 640.0);
 /// Below this width everything stacks in one column.
 const WIDE_MIN: f32 = 760.0;
 /// Content never gets wider than this (web: `max-w-5xl` plus some air).
 const MAX_CONTENT_WIDTH: f32 = 1100.0;
 const GAP: f32 = 12.0;
+/// The topology card shows its title from this width.
+const TITLE_MIN_WIDTH: f32 = 220.0;
 
 /// Draws the full window into `ui`, editing `state`; returns what the app must forward.
 /// `now` timestamps taps.
@@ -58,7 +65,13 @@ pub fn full_view(ui: &mut Ui, state: &mut UiState, now: Instant) -> Vec<UiAction
         session_strip(ui, strip, state, &mut actions);
     }
     play_button(ui, layout.play, state, layout.wide, &mut actions);
-    footer(ui, layout.footer, state, &mut actions);
+    footer(
+        ui,
+        layout.footer,
+        (layout.play.bottom(), screen.bottom()),
+        state,
+        &mut actions,
+    );
     actions
 }
 
@@ -139,9 +152,19 @@ impl Layout {
             // the session strip) goes half to the topology, half to the pulse list.
             let flex = (above - GAP - (bpm.bottom() + GAP) - GAP - header_h - 8.0).max(0.0);
             let side = (flex * 0.5).min(content.width()).floor();
+            // A square too small for the title becomes a full-width card
+            // instead: the diagram shrinks, the title stays.
+            let topology_size = if side < TITLE_MIN_WIDTH {
+                vec2(content.width(), side)
+            } else {
+                Vec2::splat(side)
+            };
             let topology = Rect::from_min_size(
-                pos2(content.center().x - side / 2.0, bpm.bottom() + GAP),
-                Vec2::splat(side),
+                pos2(
+                    content.center().x - topology_size.x / 2.0,
+                    bpm.bottom() + GAP,
+                ),
+                topology_size,
             );
             let header = row(topology.bottom() + GAP, header_h, l, r);
             let list = Rect::from_min_max(pos2(l, header.bottom() + 8.0), pos2(r, above - GAP));
@@ -206,22 +229,42 @@ fn topology_card(ui: &mut Ui, rect: Rect, state: &UiState) {
         StrokeKind::Inside,
     );
     let mut inner = rect.shrink(rect.width() * 0.06);
-    if rect.width() >= 220.0 {
-        widgets::text(
+    // A card wider than tall (narrow window) keeps the title in a strip on
+    // top and fits the diagram below it.
+    let short = rect.width() > rect.height() * 1.2;
+    if rect.width() >= TITLE_MIN_WIDTH {
+        let title_y = if short { 14.0 } else { 28.0 };
+        let title = state.messages.topology.to_uppercase();
+        let painted = widgets::text(
             painter,
-            pos2(rect.center().x, rect.top() + 28.0),
+            pos2(rect.center().x, rect.top() + title_y),
             Align2::CENTER_CENTER,
-            &state.messages.topology.to_uppercase(),
+            &title,
             theme::font_mono(9.0),
             t.text_faint,
             3.6,
         );
-        inner = inner.shrink(12.0);
+        // The painted title as its own node (the diagram has the plain name).
+        let node = ui.interact(
+            painted,
+            ui.make_persistent_id("topology-title"),
+            Sense::hover(),
+        );
+        node.widget_info(|| WidgetInfo::labeled(Role::Label, true, &title));
+        inner = if short {
+            Rect::from_min_max(pos2(rect.left(), rect.top() + 26.0), rect.max).shrink(6.0)
+        } else {
+            inner.shrink(12.0)
+        };
     }
     let side = inner.width().min(inner.height());
-    let square = Rect::from_center_size(rect.center(), Vec2::splat(side));
-    ui.scope_builder(UiBuilder::new().max_rect(square), |ui| {
-        topology(ui, state, side);
+    let area = if short {
+        Rect::from_center_size(inner.center(), vec2(inner.width(), side))
+    } else {
+        Rect::from_center_size(rect.center(), Vec2::splat(side))
+    };
+    ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
+        topology_in(ui, state, area.width(), side);
     });
 }
 
@@ -247,7 +290,7 @@ fn pulses_header(ui: &Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiA
     let enabled = state.pattern.pulses.len() < MAX_PULSES;
     let resp = widgets::button(
         ui,
-        r,
+        widgets::hit_area(r),
         ui.make_persistent_id("add-pulse"),
         &m.add_pulse,
         enabled,

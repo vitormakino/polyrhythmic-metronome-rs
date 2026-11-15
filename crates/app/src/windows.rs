@@ -9,10 +9,8 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{Pos2, Vec2, ViewportBuilder, ViewportCommand, ViewportInfo, WindowLevel};
 use pm_ui::state::WindowMode;
-use pm_ui::views::mini;
+use pm_ui::views::{full, mini};
 
-/// Smallest full window (pt).
-pub const FULL_MIN_SIZE: Vec2 = Vec2::new(420.0, 640.0);
 /// Full window size when none was saved (pt): the two-column layout.
 pub const FULL_DEFAULT_SIZE: Vec2 = Vec2::new(900.0, 700.0);
 /// How long to wait for the window to take a new mode's size before
@@ -32,7 +30,7 @@ pub struct Windows {
 
 fn min_size(mode: WindowMode) -> Vec2 {
     match mode {
-        WindowMode::Full => FULL_MIN_SIZE,
+        WindowMode::Full => full::MIN_SIZE,
         WindowMode::Mini => mini::MIN_SIZE,
     }
 }
@@ -246,7 +244,7 @@ mod tests {
         assert_eq!(
             to_full,
             [
-                ViewportCommand::MinInnerSize(FULL_MIN_SIZE),
+                ViewportCommand::MinInnerSize(full::MIN_SIZE),
                 ViewportCommand::InnerSize(Vec2::new(900.0, 700.0)),
                 ViewportCommand::OuterPosition(Pos2::new(10.0, 20.0)),
                 ViewportCommand::WindowLevel(WindowLevel::Normal),
@@ -288,8 +286,8 @@ mod tests {
         assert_eq!(b.inner_size, Some(mini::MIN_SIZE));
         assert_eq!(b.window_level, Some(WindowLevel::AlwaysOnTop));
         let c = w.switch(WindowMode::Full, now);
-        assert!(c.contains(&ViewportCommand::MinInnerSize(FULL_MIN_SIZE)));
-        assert!(c.contains(&ViewportCommand::InnerSize(FULL_MIN_SIZE)));
+        assert!(c.contains(&ViewportCommand::MinInnerSize(full::MIN_SIZE)));
+        assert!(c.contains(&ViewportCommand::InnerSize(full::MIN_SIZE)));
     }
 
     #[test]
@@ -300,7 +298,7 @@ mod tests {
         assert_eq!(b.titlebar_shown, Some(false));
         assert_eq!(b.title_shown, Some(false));
         assert_eq!(b.transparent, Some(true));
-        assert_eq!(b.min_inner_size, Some(FULL_MIN_SIZE));
+        assert_eq!(b.min_inner_size, Some(full::MIN_SIZE));
         assert_eq!(b.inner_size, Some(Vec2::new(1000.0, 800.0)));
         assert_eq!(b.position, Some(Pos2::new(5.0, 6.0)));
         assert_eq!(b.window_level, Some(WindowLevel::Normal));

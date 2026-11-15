@@ -20,7 +20,13 @@ all = "warn"
 polyrhythmic-metronome-core = { path = "../core" }
 rtrb.workspace = true
 cpal.workspace = true
-objc2-core-audio.workspace = true
-objc2-core-foundation.workspace = true
 # Debug builds check the data callback with it (release: a no-op).
 assert_no_alloc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-audio.workspace = true
+objc2-core-foundation.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-avf-audio.workspace = true
+objc2-foundation.workspace = true
