@@ -4,7 +4,7 @@
 # README (Apple Account in Xcode, ios/Signing.xcconfig, Developer Mode, the
 # phone paired once over USB with "Connect via network" on).
 #
-#   tools/ios-device.sh                    # first paired iPhone
+#   tools/ios-device.sh                    # a paired iPhone in reach
 #   tools/ios-device.sh "My iPhone"        # by name or identifier
 #   tools/ios-device.sh --if-due           # only if the last install is 6+ days old
 #   tools/ios-device.sh --install-schedule # check once a day (launchd agent)
@@ -95,13 +95,15 @@ fail() {
 [[ -f ios/Signing.xcconfig ]] \
   || fail "ios/Signing.xcconfig is missing (copy ios/Signing.xcconfig.example and set your Team ID)"
 
-# Pick the iPhone: the argument (name or identifier), else the first paired one.
+# Pick the iPhone: the argument (name or identifier), else a paired one the Mac
+# can reach now (cable or network), else the first paired one.
 devices_json="$out/devices.json"
 xcrun devicectl list devices --json-output "$devices_json" >/dev/null 2>&1 \
   || fail "could not list devices"
 read -r device_id hw_udid < <(python3 -I -c '
 import json, sys
 want = sys.argv[2]
+found = []
 for d in json.load(open(sys.argv[1]))["result"]["devices"]:
     p = d.get("properties", {})
     hw = p.get("hardware", {})
@@ -111,11 +113,14 @@ for d in json.load(open(sys.argv[1]))["result"]["devices"]:
             or p.get("connection", {}).get("pairingState") != "paired"):
         continue
     if not want or want in (name, d["identifier"], hw.get("udid")):
-        print(d["identifier"], hw.get("udid", ""))
-        sys.exit(0)
-sys.exit(1)
+        reachable = p["connection"].get("state") == "connected"
+        found.append((not reachable, d["identifier"], hw.get("udid", "")))
+if not found:
+    sys.exit(1)
+_, identifier, udid = min(found, key=lambda f: f[0])
+print(identifier, udid)
 ' "$devices_json" "$want") || fail "no paired iPhone${want:+ named $want}"
-echo "device: $device_id"
+echo "device: $device_id (pass a name to pick another: tools/ios-device.sh \"My iPhone\")"
 
 xcodebuild \
   -project ios/PolyrhythmicMetronome.xcodeproj \
