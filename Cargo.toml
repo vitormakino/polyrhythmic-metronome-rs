@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/audio", "crates/ui", "crates/shell", "crates/app", "crates/ios_host", "tools/stress"]
-# The stress harness is opt-in (`cargo run -p stress`); the iOS host only
-# does anything when built for iOS.
+members = ["crates/core", "crates/audio", "crates/ui", "crates/shell", "crates/app", "crates/ios_host", "crates/ios", "tools/stress"]
+# The stress harness is opt-in (`cargo run -p stress`); the iOS host and
+# app only do anything when built for iOS.
 default-members = ["crates/core", "crates/audio", "crates/ui", "crates/shell", "crates/app"]
 
 [workspace.package]
