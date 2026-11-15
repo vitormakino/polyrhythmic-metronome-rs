@@ -50,26 +50,33 @@ pub struct DeviceInfo {
     pub latency: OutputLatency,
 }
 
-/// Output latency of a device, as CoreAudio reports it.
+/// Output latency of a device, as the platform reports it.
 ///
-/// cpal 0.18.2 already puts the device's buffer size, `device_and_safety`
-/// and nothing else into `OutputCallbackInfo::timestamp().playback` (see
-/// `cpal::host::coreaudio::macos::device`, `build_output_stream_raw`: the
-/// render callback adds `device_buffer_frames + kAudioDevicePropertyLatency
-/// + kAudioDevicePropertySafetyOffset` to the callback time), and the engine
-/// stamps beat events with that `playback` time. Only `stream` is missing
-/// from the events' times: [`uncompensated`](Self::uncompensated).
+/// The engine stamps beat events with cpal 0.18.2's
+/// `OutputCallbackInfo::timestamp().playback`, which already counts
+/// `device_and_safety`; only `stream` is missing from the events' times:
+/// [`uncompensated`](Self::uncompensated).
+///
+/// - macOS: cpal adds the device's buffer size, `kAudioDevicePropertyLatency`
+///   and `kAudioDevicePropertySafetyOffset` to the callback time
+///   (`cpal::host::coreaudio::macos::device`, `build_output_stream_raw`);
+///   `stream` is `kAudioStreamPropertyLatency`, which cpal leaves out.
+/// - iOS: cpal adds the IO buffer and `AVAudioSession.outputLatency`
+///   (`cpal::host::coreaudio::ios`, `output_latency_frames`); both are in
+///   `device_and_safety` and `stream` is zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OutputLatency {
-    /// `kAudioDevicePropertyLatency` + `kAudioDevicePropertySafetyOffset`
-    /// (output scope).
+    /// What cpal counts in `playback`. macOS:
+    /// `kAudioDevicePropertyLatency` plus `kAudioDevicePropertySafetyOffset`
+    /// (output scope). iOS: `outputLatency` plus `IOBufferDuration`.
     pub device_and_safety: Duration,
-    /// `kAudioStreamPropertyLatency` of the first output stream.
+    /// What cpal leaves out. macOS: `kAudioStreamPropertyLatency` of the
+    /// first output stream. iOS: zero.
     pub stream: Duration,
 }
 
 impl OutputLatency {
-    /// Everything CoreAudio reports.
+    /// Everything the platform reports.
     pub fn total(&self) -> Duration {
         self.device_and_safety + self.stream
     }
@@ -544,7 +551,7 @@ impl AudioService {
         let default_uid = self
             .host
             .default_output_device()
-            .and_then(|d| output_identity(&d))
+            .and_then(|d| output_identity(&d).ok())
             .map(|(uid, _)| uid);
         let reason = match &mut self.live {
             Some(live) => watch::rebuild_reason(
@@ -662,8 +669,7 @@ fn open(
     let Some(device) = host.default_output_device() else {
         return Ok(None);
     };
-    let (uid, name) = output_identity(&device)
-        .ok_or_else(|| OpenError::Transient(cpal::Error::new(ErrorKind::DeviceNotAvailable)))?;
+    let (uid, name) = output_identity(&device)?;
     let supported = device.default_output_config()?;
     let sample_rate = supported.sample_rate();
     let channels = supported.channels();

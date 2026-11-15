@@ -6,13 +6,14 @@ use cpal::traits::DeviceTrait;
 
 use crate::stream::OutputLatency;
 
-/// CoreAudio UID and display name of `device`.
-pub(crate) fn output_identity(device: &cpal::Device) -> Option<(String, String)> {
-    let uid = device.id().ok()?.id().to_owned();
+/// CoreAudio UID and display name of `device`; the error is cpal's, so the
+/// stream opener sorts it as fatal or worth retrying by its kind.
+pub(crate) fn output_identity(device: &cpal::Device) -> Result<(String, String), cpal::Error> {
+    let uid = device.id()?.id().to_owned();
     let name = device
         .description()
         .map_or_else(|_| uid.clone(), |d| d.name().to_owned());
-    Some((uid, name))
+    Ok((uid, name))
 }
 
 /// Output latency of the device with CoreAudio UID `device_uid`:
