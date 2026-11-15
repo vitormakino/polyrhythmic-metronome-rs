@@ -1,6 +1,5 @@
 //! The Metal-backed view: its layer is the wgpu surface, its touches become
-//! egui events, and it is the target of the display link and of the
-//! background timer.
+//! egui events, and it is the target of the display link.
 
 use std::cell::RefCell;
 
@@ -8,7 +7,7 @@ use egui::{Pos2, Theme};
 use objc2::rc::Retained;
 use objc2::runtime::AnyClass;
 use objc2::{ClassType, MainThreadMarker, MainThreadOnly, define_class, msg_send};
-use objc2_foundation::{NSObject, NSSet, NSTimer};
+use objc2_foundation::{NSObject, NSSet};
 use objc2_quartz_core::{CADisplayLink, CAMetalLayer};
 use objc2_ui_kit::{
     UIEvent, UIResponder, UIScreen, UITouch, UITraitEnvironment, UIUserInterfaceStyle, UIView,
@@ -63,12 +62,6 @@ define_class!(
         #[unsafe(method(step:))]
         fn step(&self, _link: &CADisplayLink) {
             render::with_host(|host| host.frame());
-        }
-
-        /// Background `NSTimer` callback: app logic without a frame.
-        #[unsafe(method(tick:))]
-        fn tick(&self, _timer: &NSTimer) {
-            render::with_host(|host| host.background_tick());
         }
     }
 );

@@ -8,9 +8,11 @@
 //! 27 requires (rust-windowing/winit#4723). Delete this crate once
 //! winit/eframe support UIScene; it is self-contained for that reason.
 //!
-//! Only [`input`] (pure helpers) builds on other platforms; [`run`] is iOS only.
+//! Only [`input`] and [`lifecycle`] (pure helpers) build on other platforms;
+//! [`run`] is iOS only.
 
 pub mod input;
+pub mod lifecycle;
 
 #[cfg(target_os = "ios")]
 mod delegates;
@@ -26,5 +28,6 @@ pub use delegates::run;
 /// `UISceneDelegateClassName` in the app's Info.plist.
 pub const SCENE_DELEGATE_CLASS: &str = "PMSceneDelegate";
 
-/// Builds the app once the scene has connected, given the host's context.
+/// Builds the app once the first scene has connected, given the host's
+/// context. Called once: the app outlives scene disconnects.
 pub type Factory = Box<dyn FnOnce(&egui::Context) -> Box<dyn pm_shell::AppShell>>;
