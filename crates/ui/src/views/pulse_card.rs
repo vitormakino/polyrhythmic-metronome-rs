@@ -383,7 +383,7 @@ impl Card<'_> {
         let grip_rect = slot(left);
         let grip = widgets::handle(
             ui,
-            grip_rect,
+            widgets::hit_area(grip_rect),
             id.with("move"),
             &self.label(&self.m.pulse_move),
         );
@@ -403,7 +403,7 @@ impl Card<'_> {
         let gear_rect = slot(left + ICON_BUTTON);
         let gear = widgets::toggle(
             ui,
-            gear_rect,
+            widgets::hit_area(gear_rect),
             id.with("settings"),
             &self.label(&self.m.pulse_settings),
             self.open,
@@ -421,7 +421,7 @@ impl Card<'_> {
         let trash_rect = slot(right);
         let trash = widgets::button(
             ui,
-            trash_rect,
+            widgets::hit_area(trash_rect),
             id.with("remove"),
             &self.label(&self.m.pulse_remove),
             self.can_remove,
@@ -441,7 +441,7 @@ impl Card<'_> {
         let power_rect = slot(right - ICON_BUTTON);
         let power = widgets::toggle(
             ui,
-            power_rect,
+            widgets::hit_area(power_rect),
             id.with("mute"),
             &self.label(&self.m.pulse_mute),
             !self.enabled,
@@ -489,7 +489,7 @@ impl Card<'_> {
         let up = Rect::from_min_size(pos2(cx - 16.0, y), vec2(32.0, STEP_H));
         let up_resp = widgets::button(
             ui,
-            up,
+            widgets::hit_area(up),
             id.with("more"),
             &self.label(&self.m.pulse_more_beats),
             true,
@@ -518,7 +518,7 @@ impl Card<'_> {
         let can_less = pulse.beats > 1;
         let down_resp = widgets::button(
             ui,
-            down,
+            widgets::hit_area(down),
             id.with("less"),
             &self.label(&self.m.pulse_fewer_beats),
             can_less,

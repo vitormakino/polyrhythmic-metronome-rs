@@ -12,7 +12,8 @@ use pm_ui::state::{PENDING_BEATS_CAP, UiAction, UiState};
 use pm_ui::theme::{self, Theme};
 use pm_ui::views::full::full_view;
 
-const MIN: Vec2 = Vec2::new(420.0, 640.0);
+const MIN: Vec2 = pm_ui::views::full::MIN_SIZE;
+const PHONE: Vec2 = Vec2::new(375.0, 640.0);
 const MEDIUM: Vec2 = Vec2::new(900.0, 700.0);
 const LARGE: Vec2 = Vec2::new(1400.0, 900.0);
 
@@ -485,6 +486,43 @@ fn snapshot_themed(
 #[test]
 fn full_min_default() {
     snapshot("full_min_default", MIN, false);
+}
+
+#[test]
+fn full_375_default() {
+    snapshot("full_375_default", PHONE, false);
+    let h = harness(PHONE, UiState::default());
+    assert!(h.query_by_label_contains("Rhythmic topology").is_some());
+}
+
+#[test]
+fn icon_buttons_have_44pt_hit_area() {
+    let h = harness(PHONE, UiState::default());
+    for label in [
+        "Pulse 1: settings",
+        "Pulse 1: mute",
+        "Pulse 1: remove",
+        "Increase BPM",
+        "Decrease BPM",
+        "Tap",
+    ] {
+        let rect = h.get_by_label(label).rect();
+        assert!(
+            rect.width() >= 44.0 && rect.height() >= 44.0,
+            "{label} hit area is {:?}",
+            rect.size()
+        );
+    }
+}
+
+#[test]
+fn mini_button_hidden_when_switched_off() {
+    let h = harness(MEDIUM, UiState::default());
+    assert!(h.query_by_label("Pin mini").is_some());
+    let mut state = UiState::default();
+    state.show_mini_button = false;
+    let h = harness(MEDIUM, state);
+    assert!(h.query_by_label("Pin mini").is_none());
 }
 
 #[test]

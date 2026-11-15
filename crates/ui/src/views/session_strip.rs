@@ -32,7 +32,9 @@ const SEPARATOR: &str = " · ";
 
 /// Height the strip takes in the full window.
 pub fn strip_height(state: &UiState) -> f32 {
-    if state.session.is_none() {
+    if !state.show_sessions {
+        0.0
+    } else if state.session.is_none() {
         STRIP_LINE_H
     } else {
         STRIP_H

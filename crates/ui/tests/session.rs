@@ -19,7 +19,7 @@ use pm_ui::theme::{self, Theme};
 use pm_ui::views::full::full_view;
 use pm_ui::views::mini::{DEFAULT_SIZE, mini_view};
 
-const MIN: Vec2 = Vec2::new(420.0, 640.0);
+const MIN: Vec2 = pm_ui::views::full::MIN_SIZE;
 const MEDIUM: Vec2 = Vec2::new(900.0, 700.0);
 const SAMPLE_RATE: u32 = 48_000;
 
@@ -164,6 +164,16 @@ fn no_sessions_shows_selector_and_hint() {
     let h = harness(MEDIUM, state);
     assert!(h.query_by_value("No session").is_some());
     assert!(h.query_by_label_contains("Add sessions").is_none());
+}
+
+#[test]
+fn sessions_hidden_when_switched_off() {
+    let mut state = UiState::default();
+    state.sessions = vec![entry(plan("Warm-up"))].into();
+    state.show_sessions = false;
+    assert_eq!(pm_ui::views::session_strip::strip_height(&state), 0.0);
+    let h = harness(MEDIUM, state);
+    assert!(h.query_by_role(Role::ComboBox).is_none());
 }
 
 #[test]

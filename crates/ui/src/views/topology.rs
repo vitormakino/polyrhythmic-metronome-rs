@@ -9,7 +9,7 @@
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
-use egui::{Align2, Pos2, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo, pos2};
+use egui::{Align2, Pos2, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo, pos2, vec2};
 
 use super::widgets;
 use crate::state::UiState;
@@ -110,7 +110,13 @@ fn strip_height(size: f32) -> f32 {
 /// Paints the topology in a `size` x `size` square: the rings above, the
 /// indicators in a strip at the bottom (outside the ring area).
 pub fn topology(ui: &mut Ui, state: &UiState, size: f32) {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    topology_in(ui, state, size, size);
+}
+
+/// Like [`topology`] in a `width` x `size` area: the rings are as big as
+/// `size` allows and stay centered; a wider area only gives the indicators room.
+pub fn topology_in(ui: &mut Ui, state: &UiState, width: f32, size: f32) {
+    let (rect, response) = ui.allocate_exact_size(vec2(width, size), Sense::hover());
     response.widget_info(|| WidgetInfo::labeled(Role::Image, true, &state.messages.topology));
     let painter = ui.painter_at(rect);
     let t = state.theme.clone();
@@ -174,7 +180,7 @@ pub fn topology(ui: &mut Ui, state: &UiState, size: f32) {
         }
     }
 
-    indicators(&painter, rect, strip, size, state);
+    indicators(&painter, rect, strip, rect.width(), state);
 }
 
 /// Coincidence light and engine status in the strip under the rings.

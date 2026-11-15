@@ -14,7 +14,7 @@ use pm_ui::views::footer::MAX_VISUAL_OFFSET_MS;
 use pm_ui::views::mini;
 use serde::Serialize;
 
-use crate::windows::FULL_MIN_SIZE;
+use pm_ui::views::full::MIN_SIZE as FULL_MIN_SIZE;
 
 const FILE: &str = "settings.toml";
 
@@ -276,7 +276,7 @@ mod tests {
         assert_eq!(s.visual_offsets.get("b"), None, "not a u32: dropped");
         assert_eq!(s.visual_offsets.get("c"), Some(&40));
         // Too small for the full window: grown to its minimum size.
-        assert_eq!(s.full_rect, Some([0.0, 0.0, 420.0, 640.0]));
+        assert_eq!(s.full_rect, Some([0.0, 0.0, 375.0, 640.0]));
         assert_eq!(s.mini_rect, None, "non-finite rect dropped");
 
         write(&dir.0, "bpm = 3\n");
