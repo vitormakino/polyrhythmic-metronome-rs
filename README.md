@@ -47,7 +47,9 @@ The same metronome runs on the iPhone: the full view in portrait, with the
 same pattern, tempo and per-beat controls. The mini window, menu bar,
 hotkeys, practice sessions and config files are Mac only. Playback continues
 with the screen locked, in the background and with the silent switch on. A
-call or alarm stops it, and it stays stopped until you press Play again.
+call or alarm stops it, and it stays stopped until you press Play again. It
+plays along with music from other apps (both are heard; set each one's volume
+in its own app), and while stopped it leaves the audio to them.
 
 ### Requirements
 

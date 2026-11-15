@@ -514,3 +514,28 @@ Build Configuration: Release).
 
 Record the result here: date, iPhone model, iOS version, headphones used,
 what differed.
+
+### Playing along with other apps, audio released while stopped
+
+Status: PENDING (owner). The agent checked on the simulator only that the
+app launches without activating its audio session and without session
+errors in the log; mixing with another app and suspension need an iPhone.
+
+The session is `playback` with `mixWithOthers`, active only from PLAY until
+half a second after STOP. Install a Release build as above.
+
+1. **Play along with music.** Start a song in another app (Music, Spotify),
+   open the metronome and press PLAY; STOP, wait a few seconds and press
+   PLAY again. Expected: both are audible and neither pauses the other (each
+   app's volume is set in that app); every PLAY starts on the "one" with the
+   first click whole.
+2. **Open the app while music plays.** With a song playing in another app,
+   open the metronome, both from closed and from the background, and leave
+   it stopped. Expected: the music keeps playing, with no dip or pause.
+3. **Stopped app in the background.** Press PLAY, then STOP, go to the home
+   screen and leave the iPhone for 10 minutes. Expected: iOS suspends the
+   app: Settings > Battery shows no background activity (no battery use)
+   for it in that time. Back in the app, PLAY plays at once.
+
+Record the result here: date, iPhone model, iOS version, music app used,
+what differed.

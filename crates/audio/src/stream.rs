@@ -19,7 +19,7 @@ use pm_core::{Bpm, MusicalPosition, Pattern};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine::{Engine, EngineHandle, EngineInit};
-use crate::messages::{Command, PositionSnapshot};
+use crate::messages::{Command, PatternUpdate, PositionSnapshot};
 use crate::platform::{output_identity, query_output_latency};
 use crate::session::SessionReader;
 use crate::watch::{self, Observation, RebuildCounts, RebuildReason, WatchState};
@@ -372,6 +372,50 @@ impl Transport {
     }
 }
 
+/// Edits a suspended service keeps back from the engine, which takes no
+/// command while paused: only the transport records them, and on resume the
+/// engine gets the latest pattern and tempo once, ahead of the `Play` that
+/// follows. Without it every slider step and pattern edit made while
+/// stopped would fill the engine's queue, then the controller's outbox,
+/// and delay the first click.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Held {
+    bpm: bool,
+    pattern: bool,
+}
+
+impl Held {
+    /// Whether `command`, sent while suspended, waits for the resume.
+    fn hold(&mut self, command: &Command) -> bool {
+        match command {
+            Command::SetBpm(_) => self.bpm = true,
+            Command::SetPattern(_) => self.pattern = true,
+            // Small and few (one per tap): they keep their order in the queue.
+            Command::Play | Command::Stop | Command::UserPulse(_) | Command::Session(_) => {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// What the engine needs to catch up with `transport` (at
+    /// `sample_rate`), and nothing is held any more.
+    fn release(&mut self, transport: &Transport, sample_rate: u32) -> Vec<Command> {
+        let held = std::mem::take(self);
+        let mut commands = Vec::new();
+        if held.pattern {
+            commands.push(Command::SetPattern(PatternUpdate::build(
+                sample_rate,
+                transport.pattern.clone(),
+            )));
+        }
+        if held.bpm {
+            commands.push(Command::SetBpm(transport.bpm));
+        }
+        commands
+    }
+}
+
 /// Runs the engine on the default output device and keeps it there.
 pub struct AudioService {
     host: cpal::Host,
@@ -393,6 +437,11 @@ pub struct AudioService {
     next_attempt: Instant,
     /// Monotonic and wall clock at the last tick, to notice sleep.
     clocks: (Instant, SystemTime),
+    /// The stream is paused on purpose ([`suspend_output`](Self::suspend_output)),
+    /// and a rebuilt one opens paused.
+    suspended: bool,
+    /// Edits sent while suspended, for the engine on resume.
+    held: Held,
 }
 
 /// An open stream and what watches it.
@@ -406,6 +455,8 @@ struct Live {
     error: Arc<ErrorSlot>,
     /// Data callbacks so far.
     callbacks: Arc<AtomicU64>,
+    /// Resumes from a pause so far (see `Callback::resumes`).
+    resumes: Arc<AtomicU64>,
     /// What `tick` remembers about this stream.
     watch: WatchState,
 }
@@ -416,7 +467,17 @@ impl AudioService {
     /// keeps trying and [`device_info`](Self::device_info) is `None`. Fails
     /// only if a present device refuses every stream configuration.
     pub fn start(init: EngineInit) -> Result<AudioService, AudioError> {
-        Self::start_inner(init, None)
+        Self::start_inner(init, None, false)
+    }
+
+    /// Like [`start`](Self::start), with the stream opened but not started
+    /// (as after [`suspend_output`](Self::suspend_output)) until
+    /// [`resume_output`](Self::resume_output). For an iPhone app, which must
+    /// not start an output unit before it has activated its audio session
+    /// (starting one activates the session synchronously, on the caller's
+    /// thread).
+    pub fn start_suspended(init: EngineInit) -> Result<AudioService, AudioError> {
+        Self::start_inner(init, None, true)
     }
 
     /// Like [`start`](Self::start), and the data callback also copies the
@@ -430,18 +491,19 @@ impl AudioService {
         init: EngineInit,
         tap_samples: usize,
     ) -> Result<AudioService, AudioError> {
-        Self::start_inner(init, Some(tap_samples))
+        Self::start_inner(init, Some(tap_samples), false)
     }
 
     fn start_inner(
         init: EngineInit,
         tap_capacity: Option<usize>,
+        suspended: bool,
     ) -> Result<AudioService, AudioError> {
         let host = cpal::default_host();
         let transport = Transport::new(&init);
         let now = Instant::now();
         let mut last_error = None;
-        let (live, handle) = match open(&host, &init, tap_capacity) {
+        let (live, handle) = match open(&host, &init, tap_capacity, !suspended) {
             Ok(Some((live, handle))) => (Some(live), handle),
             Ok(None) => (None, placeholder(&init)),
             Err(OpenError::Transient(e)) => {
@@ -463,7 +525,71 @@ impl AudioService {
             last_error,
             next_attempt: now + RETRY,
             clocks: (now, SystemTime::now()),
+            suspended,
+            held: Held::default(),
         })
+    }
+
+    /// Pauses the stream (the output unit stops calling back) until
+    /// [`resume_output`](Self::resume_output); the watcher takes the
+    /// silence for what it is, and a stream rebuilt meanwhile (new device,
+    /// stream error) opens paused. Send `Stop` first and let the engine take
+    /// it: commands wait in the queue while paused, except `SetBpm` and
+    /// `SetPattern`, which the resume sends once, latest only. Meant for the iPhone
+    /// app, which releases the audio while stopped; the Mac app never
+    /// pauses.
+    pub fn suspend_output(&mut self) {
+        self.suspended = true;
+        if let Some(live) = &self.live
+            && let Err(e) = live.stream.pause()
+        {
+            // Rebuilt at the next tick, paused.
+            live.error.set(e.kind());
+        }
+    }
+
+    /// Starts the paused stream again; commands sent meanwhile apply at its
+    /// first callback (a `Play` sent after this starts at the "one" with
+    /// nothing lost). A stream that will not start is rebuilt at the next
+    /// tick.
+    pub fn resume_output(&mut self) {
+        if !std::mem::take(&mut self.suspended) {
+            return;
+        }
+        let rate = self
+            .live
+            .as_ref()
+            .map_or(IDLE_SAMPLE_RATE, |live| live.info.sample_rate);
+        // Without a stream the next one opens from the transport anyway.
+        let catch_up = self.held.release(&self.transport, rate);
+        if self.live.is_some() {
+            if self.handle.commands.slots() < catch_up.len() {
+                // No room (a queue full of taps): an engine built from the
+                // transport is as current, and starts playing.
+                let now = Instant::now();
+                self.rebuild(now);
+                return;
+            }
+            for command in catch_up {
+                // Checked above: there is room.
+                let pushed = self.handle.commands.push(command);
+                debug_assert!(pushed.is_ok());
+            }
+        }
+        if let Some(live) = &mut self.live {
+            let callbacks = live.callbacks.load(Ordering::Relaxed);
+            live.watch.restart(callbacks, Instant::now());
+            live.resumes.fetch_add(1, Ordering::Release);
+            if let Err(e) = live.stream.play() {
+                live.error.set(e.kind());
+            }
+        }
+    }
+
+    /// Whether the stream is paused on purpose (see
+    /// [`suspend_output`](Self::suspend_output)).
+    pub fn is_suspended(&self) -> bool {
+        self.suspended
     }
 
     /// Sends `command` to the engine and records it for rebuilds. All
@@ -471,6 +597,11 @@ impl AudioService {
     /// Gives the command back if the queue is full. Without an output it is
     /// only recorded.
     pub fn send(&mut self, command: Command) -> Result<(), Command> {
+        // While suspended, edits only update the transport (see `Held`).
+        if self.suspended && self.held.hold(&command) {
+            self.transport.record(&command);
+            return Ok(());
+        }
         if self.live.is_some() && self.handle.commands.slots() == 0 {
             return Err(command);
         }
@@ -563,6 +694,7 @@ impl AudioService {
                     error: live.error.get(),
                     uid: &live.info.uid,
                     default_uid,
+                    suspended: self.suspended,
                 },
             ),
             None => default_uid.filter(|_| now >= self.next_attempt).map(|to| {
@@ -605,7 +737,7 @@ impl AudioService {
             .transport
             .resume_init_with(snapshot, &self.handle.session);
         self.next_attempt = now + RETRY;
-        let (live, mut handle) = match open(&self.host, &init, self.tap_capacity) {
+        let (live, mut handle) = match open(&self.host, &init, self.tap_capacity, !self.suspended) {
             Ok(Some(opened)) => opened,
             // Keep the old handle: its position stays the last one played.
             Ok(None) => return,
@@ -615,6 +747,8 @@ impl AudioService {
             }
         };
         self.last_error = None;
+        // Built from the transport: nothing left to catch up with.
+        self.held = Held::default();
         self.transport.engine_replaced();
         if let Some(command) = self.transport.queued_session() {
             // A fresh queue: there is room.
@@ -660,11 +794,13 @@ impl From<cpal::Error> for OpenError {
 }
 
 /// Opens a stream for an engine built from `init` on the default output, at
-/// the device's own sample rate. `Ok(None)`: there is no output device.
+/// the device's own sample rate, and starts it if `play`. `Ok(None)`: there
+/// is no output device.
 fn open(
     host: &cpal::Host,
     init: &EngineInit,
     tap_capacity: Option<usize>,
+    play: bool,
 ) -> Result<Option<(Live, EngineHandle)>, OpenError> {
     let Some(device) = host.default_output_device() else {
         return Ok(None);
@@ -684,6 +820,7 @@ fn open(
     let error = Arc::new(ErrorSlot::default());
     let callbacks = Arc::new(AtomicU64::new(0));
     let halted = Arc::new(AtomicBool::new(false));
+    let resumes = Arc::new(AtomicU64::new(0));
     let mut last_error = None;
     for buffer_size in sizes {
         let config = StreamConfig {
@@ -704,6 +841,8 @@ fn open(
             underruns: Arc::clone(&handle.underruns),
             callbacks: Arc::clone(&callbacks),
             halted: Arc::clone(&halted),
+            resumes: Arc::clone(&resumes),
+            seen_resumes: 0,
             tap: tap_tx,
         };
         let on_error = {
@@ -726,7 +865,9 @@ fn open(
             None,
         ) {
             Ok(stream) => {
-                stream.play()?;
+                if play {
+                    stream.play()?;
+                }
                 let info = DeviceInfo {
                     latency: query_output_latency(&uid).unwrap_or_default(),
                     uid,
@@ -740,6 +881,7 @@ fn open(
                     tap: tap_rx,
                     error,
                     callbacks,
+                    resumes,
                     watch: WatchState::new(Instant::now()),
                 };
                 return Ok(Some((live, handle)));
@@ -765,6 +907,10 @@ struct Callback {
     /// Set when the service replaces this stream: output silence, render
     /// nothing, so the engine's position stays where the snapshot read it.
     halted: Arc<AtomicBool>,
+    /// Times the service resumed this stream from a pause, and the count
+    /// at the previous callback: the gap across a pause is not late.
+    resumes: Arc<AtomicU64>,
+    seen_resumes: u64,
     /// Copy of the output for measurement tools; `None` in normal use.
     tap: Option<TapTx>,
 }
@@ -787,6 +933,11 @@ impl Callback {
         }
         let ts = info.timestamp();
         let frames = (data.len() / self.channels) as u64;
+        let resumes = self.resumes.load(Ordering::Acquire);
+        if resumes != self.seen_resumes {
+            self.seen_resumes = resumes;
+            self.last = None;
+        }
         // Counts late callbacks only. A stall is the service's business: it
         // watches `callbacks`, which does not depend on CoreAudio's host
         // time (a bogus `mHostTime` would fake a gap here).
@@ -846,6 +997,8 @@ mod tests {
             underruns: Arc::clone(&handle.underruns),
             callbacks: Arc::new(AtomicU64::new(0)),
             halted: Arc::new(AtomicBool::new(false)),
+            resumes: Arc::new(AtomicU64::new(0)),
+            seen_resumes: 0,
             tap: Some(tap_tx),
         };
         let mut out = [0.0f32; 960];
@@ -887,6 +1040,92 @@ mod tests {
         assert!(out.iter().all(|&x| x == 0.0));
         assert_eq!(handle.position.snapshot().frame, frame);
         assert_eq!(cb.callbacks.load(Ordering::Relaxed), 7);
+    }
+
+    /// A stream the service paused and resumed: the pause is not an
+    /// underrun, a late callback after it still is. Without allocating.
+    #[test]
+    fn callback_does_not_count_a_pause_as_an_underrun() {
+        let init = EngineInit {
+            pattern: Pattern::default(),
+            bpm: Bpm::new(120),
+            resume: None,
+            session: None,
+        };
+        let (engine, handle) = Engine::new(48_000, 2, init);
+        let resumes = Arc::new(AtomicU64::new(0));
+        let mut cb = Callback {
+            engine,
+            channels: 2,
+            sample_rate: 48_000,
+            last: None,
+            underruns: Arc::clone(&handle.underruns),
+            callbacks: Arc::new(AtomicU64::new(0)),
+            halted: Arc::new(AtomicBool::new(false)),
+            resumes: Arc::clone(&resumes),
+            seen_resumes: 0,
+            tap: None,
+        };
+        let mut out = [0.0f32; 960];
+        assert_no_alloc::assert_no_alloc(|| {
+            cb.run(&mut out, &at(0));
+            cb.run(&mut out, &at(10));
+        });
+        // Paused for a minute, then resumed.
+        resumes.fetch_add(1, Ordering::Release);
+        assert_no_alloc::assert_no_alloc(|| {
+            cb.run(&mut out, &at(60_010));
+            cb.run(&mut out, &at(60_020));
+        });
+        assert_eq!(handle.underruns.load(Ordering::Relaxed), 0);
+        assert_no_alloc::assert_no_alloc(|| cb.run(&mut out, &at(60_040)));
+        assert_eq!(handle.underruns.load(Ordering::Relaxed), 1);
+    }
+
+    /// Many edits while suspended: none reaches the engine's queue, the
+    /// resume sends the latest pattern and tempo once, and the `Play` after
+    /// them is taken at the stream's first callback.
+    #[test]
+    fn edits_while_suspended_wait_as_one_and_play_starts_at_once() {
+        let init = EngineInit {
+            pattern: Pattern::default(),
+            bpm: Bpm::new(120),
+            resume: None,
+            session: None,
+        };
+        let mut transport = Transport::new(&init);
+        let mut held = Held::default();
+        let (mut engine, mut handle) = Engine::new(48_000, 2, init);
+        let queued = handle.commands.slots();
+        for n in 0..200 {
+            let edits = [
+                Command::SetBpm(Bpm::new(60 + n)),
+                Command::SetPattern(PatternUpdate::build(48_000, Pattern::default())),
+            ];
+            for edit in edits {
+                assert!(held.hold(&edit), "held, not queued");
+                transport.record(&edit);
+            }
+        }
+        assert_eq!(handle.commands.slots(), queued, "nothing queued");
+        assert!(!held.hold(&Command::Play));
+        assert!(!held.hold(&Command::Stop));
+
+        let catch_up = held.release(&transport, 48_000);
+        assert!(matches!(
+            catch_up.as_slice(),
+            [Command::SetPattern(_), Command::SetBpm(bpm)] if *bpm == Bpm::new(259)
+        ));
+        assert_eq!(held, Held::default());
+        assert!(held.release(&transport, 48_000).is_empty(), "sent once");
+        for command in catch_up {
+            assert!(handle.commands.push(command).is_ok());
+        }
+        assert!(handle.commands.push(Command::Play).is_ok());
+        let mut out = [0.0f32; 960];
+        engine.render(&mut out, Duration::ZERO);
+        assert!(handle.position.snapshot().playing);
+        assert!(out.iter().any(|&x| x != 0.0), "the first click sounds");
     }
 
     #[test]

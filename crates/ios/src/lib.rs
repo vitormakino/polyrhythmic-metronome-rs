@@ -1,18 +1,21 @@
 //! The iPhone app: [`pm_ios_main`] (iOS only) sets up the audio session,
 //! loads the settings, picks the language and runs [`IosApp`] in the iOS
 //! host. The decisions ([`language_for`], [`theme_for`],
-//! [`on_interruption`]) and [`IosApp`] build on any platform, for the tests.
+//! [`on_interruption`], [`output_gate`]) and [`IosApp`] build on any
+//! platform, for the tests.
 //!
-//! Threads: everything runs on the main thread except the audio callback;
-//! the session's notifications arrive on the main queue and reach the app
+//! Threads: everything runs on the main thread except the audio callback
+//! and the session's activations and deactivations (on its own serial
+//! queue); the session's notifications and activation results reach the app
 //! through a channel drained in `logic`.
 
 pub mod app;
 pub mod audio_session;
 pub mod locale;
+pub mod output_gate;
 
-pub use app::{IosApp, SessionLink, theme_for};
-pub use audio_session::{Interruption, interruption_from, on_interruption};
+pub use app::{IosApp, Output, SessionLink, theme_for};
+pub use audio_session::{Interruption, SessionEvent, interruption_from, on_interruption};
 pub use locale::language_for;
 
 // Debug builds abort on an allocation inside the audio callback (the
@@ -50,6 +53,7 @@ static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 #[cfg(target_os = "ios")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pm_ios_main() -> ! {
+    use std::rc::Rc;
     use std::sync::mpsc;
 
     use pm_ui::i18n::Messages;
@@ -57,9 +61,10 @@ pub extern "C" fn pm_ios_main() -> ! {
 
     use crate::audio_session::AudioSession;
 
-    // Before the stream opens, so it opens in the `playback` category.
-    let (interruptions_tx, interruptions) = mpsc::channel();
-    let session = AudioSession::start(interruptions_tx);
+    // Before the stream opens, so it opens in the session's category.
+    // Nothing is activated until the first Play.
+    let (events_tx, events) = mpsc::channel();
+    let session = Rc::new(AudioSession::start(events_tx));
 
     // `dirs::data_dir()` is `$HOME/Library/Application Support`, and iOS
     // sets `$HOME` to the app's data container: the file stays inside the
@@ -70,10 +75,14 @@ pub extern "C" fn pm_ios_main() -> ! {
 
     pm_ios_host::run(Box::new(move |ctx| {
         theme::install(ctx);
-        let audio = pm_shell::start_audio(&settings);
+        // Opened paused: starting an output unit would activate the
+        // session, synchronously, on this (the main) thread.
+        let audio = pm_shell::start_audio_suspended(&settings);
+        let (on, off) = (Rc::clone(&session), session);
         let link = SessionLink {
-            interruptions,
-            activate: Box::new(move || session.activate()),
+            events,
+            activate: Box::new(move |id| on.activate(id)),
+            deactivate: Box::new(move || off.deactivate()),
         };
         Box::new(IosApp::new(audio, &settings, settings_dir, messages, link))
     }))

@@ -37,6 +37,7 @@ mod tests {
                     error: None,
                     uid: "Speaker",
                     default_uid: Some(default.to_owned()),
+                    suspended: false,
                 },
             )
         };
