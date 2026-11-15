@@ -35,7 +35,21 @@ fn main() {
         }
     }
 
-    pm_ios_host::run(Box::new(|_ctx| Box::new(Smoke::default())));
+    pm_ios_host::run(Box::new(|ctx| {
+        // egui has no font by default (the app brings its own): borrow one.
+        let mut fonts = egui::FontDefinitions::empty();
+        fonts.font_data.insert(
+            "Inter".into(),
+            std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+                "../../ui/assets/fonts/Inter-Regular.ttf"
+            ))),
+        );
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            fonts.families.insert(family, vec!["Inter".into()]);
+        }
+        ctx.set_fonts(fonts);
+        Box::new(Smoke::default())
+    }));
 }
 
 #[cfg(not(target_os = "ios"))]

@@ -168,6 +168,10 @@ impl Host {
 
     /// One frame: input, `logic`, `ui`, paint.
     pub(crate) fn frame(&mut self) {
+        // The scene may move to a screen of another scale.
+        if let Some(screen) = self.view.screen() {
+            self.view.sync_scale(&screen);
+        }
         let (w, h) = self.view.pixel_size();
         if (w, h) != (self.config.width, self.config.height) {
             self.config.width = w;
@@ -222,16 +226,25 @@ impl Host {
             size_in_pixels: [self.config.width, self.config.height],
             pixels_per_point: ppp,
         };
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            _ => {
-                // Lost or outdated: reconfigure and try again next frame.
-                // The uploaded textures stay; the freed ones are freed.
-                self.surface.configure(&self.device, &self.config);
-                self.free_textures(&mut out.textures_delta);
-                return;
+        // Suboptimal still presents, then reconfigures; Outdated and Lost
+        // reconfigure and skip; Timeout, Occluded and Validation skip.
+        let (frame, reconfigure) = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t) => (Some(t), false),
+            wgpu::CurrentSurfaceTexture::Suboptimal(t) => (Some(t), true),
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                (None, true)
             }
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded
+            | wgpu::CurrentSurfaceTexture::Validation => (None, false),
+        };
+        let Some(frame) = frame else {
+            if reconfigure {
+                self.surface.configure(&self.device, &self.config);
+            }
+            // The uploaded textures stay; the freed ones are freed.
+            self.free_textures(&mut out.textures_delta);
+            return;
         };
         let target = frame.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -263,6 +276,9 @@ impl Host {
         buffers.push(encoder.finish());
         self.queue.submit(buffers);
         self.queue.present(frame);
+        if reconfigure {
+            self.surface.configure(&self.device, &self.config);
+        }
         self.free_textures(&mut out.textures_delta);
     }
 

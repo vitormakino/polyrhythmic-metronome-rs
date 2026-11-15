@@ -11,20 +11,20 @@ use objc2::{ClassType, MainThreadMarker, MainThreadOnly, define_class, msg_send}
 use objc2_foundation::{NSObject, NSSet, NSTimer};
 use objc2_quartz_core::{CADisplayLink, CAMetalLayer};
 use objc2_ui_kit::{
-    UIEvent, UIResponder, UITouch, UITraitEnvironment, UIUserInterfaceStyle, UIView,
+    UIEvent, UIResponder, UIScreen, UITouch, UITraitEnvironment, UIUserInterfaceStyle, UIView,
 };
 
-use crate::input::{TouchPhase, touch_events};
+use crate::input::{TouchPhase, TouchQueue};
 use crate::render;
 
 thread_local! {
-    /// Touch events since the last frame.
-    static EVENTS: RefCell<Vec<egui::Event>> = const { RefCell::new(Vec::new()) };
+    /// Touch events waiting for egui.
+    static TOUCHES: RefCell<TouchQueue> = RefCell::new(TouchQueue::default());
 }
 
-/// The events gathered since the last call.
+/// The touch events for the frame about to run.
 pub(crate) fn take_events() -> Vec<egui::Event> {
-    EVENTS.with(|e| std::mem::take(&mut *e.borrow_mut()))
+    TOUCHES.with(|t| t.borrow_mut().take_frame())
 }
 
 define_class!(
@@ -78,6 +78,21 @@ impl MetalView {
         unsafe { msg_send![Self::alloc(mtm), init] }
     }
 
+    /// Matches the drawable's scale to the screen's native pixels. A view
+    /// backed by a `CAMetalLayer` keeps a scale of 1 unless told, which
+    /// renders at a third of the resolution on a 3× screen.
+    pub(crate) fn sync_scale(&self, screen: &UIScreen) {
+        let scale = screen.nativeScale();
+        if self.contentScaleFactor() != scale {
+            self.setContentScaleFactor(scale);
+        }
+    }
+
+    /// The screen of the view's window scene, once it is in a window.
+    pub(crate) fn screen(&self) -> Option<Retained<UIScreen>> {
+        Some(self.window()?.windowScene()?.screen())
+    }
+
     /// The view's drawable size in pixels.
     pub(crate) fn pixel_size(&self) -> (u32, u32) {
         let size = self.bounds().size;
@@ -100,7 +115,7 @@ impl MetalView {
             return;
         };
         let p = touch.locationInView(Some(self));
-        let events = touch_events(Pos2::new(p.x as f32, p.y as f32), phase);
-        EVENTS.with(|e| e.borrow_mut().extend(events));
+        let pos = Pos2::new(p.x as f32, p.y as f32);
+        TOUCHES.with(|t| t.borrow_mut().push(pos, phase));
     }
 }

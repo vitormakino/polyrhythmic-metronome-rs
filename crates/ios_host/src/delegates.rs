@@ -74,6 +74,7 @@ define_class!(
             let window = UIWindow::initWithWindowScene(UIWindow::alloc(mtm), scene);
             let view = MetalView::new(mtm);
             view.setMultipleTouchEnabled(false);
+            view.sync_scale(&scene.screen());
             let controller = UIViewController::new(mtm);
             controller.setView(Some(&view));
             window.setRootViewController(Some(&controller));

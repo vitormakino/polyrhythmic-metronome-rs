@@ -14,8 +14,10 @@ pub enum TouchPhase {
 }
 
 /// One touch as egui pointer events: the pointer moves to it, a press on
-/// `Began`, a release and the pointer leaving on `Ended`/`Cancelled` (a
-/// finger has no hover, so nothing stays hovered after it lifts).
+/// `Began`, a release and the pointer leaving on `Ended` (a finger has no
+/// hover, so nothing stays hovered after it lifts). `Cancelled` (the system
+/// took the touch) only makes the pointer leave: its release must reach egui
+/// a frame later, which [`TouchQueue`] does.
 pub fn touch_events(pos: Pos2, phase: TouchPhase) -> Vec<Event> {
     let button = |pressed| Event::PointerButton {
         pos,
@@ -27,12 +29,52 @@ pub fn touch_events(pos: Pos2, phase: TouchPhase) -> Vec<Event> {
     match phase {
         TouchPhase::Began => events.push(button(true)),
         TouchPhase::Moved => {}
-        TouchPhase::Ended | TouchPhase::Cancelled => {
+        TouchPhase::Ended => {
             events.push(button(false));
             events.push(Event::PointerGone);
         }
+        TouchPhase::Cancelled => events.push(Event::PointerGone),
     }
     events
+}
+
+/// The touch events waiting for egui, frame by frame.
+///
+/// A cancelled touch must not click, nor leave a drag going. egui 0.37 has
+/// no pointer cancel and makes any release a click while the press is short
+/// and still, wherever the pointer is; but a frame that ends with the
+/// pointer gone clears what the press would click or drag. So the queue
+/// sends `PointerGone` in one frame and the release in the next.
+#[derive(Debug, Default)]
+pub struct TouchQueue {
+    this_frame: Vec<Event>,
+    next_frame: Vec<Event>,
+}
+
+impl TouchQueue {
+    /// Queues one touch.
+    pub fn push(&mut self, pos: Pos2, phase: TouchPhase) {
+        match phase {
+            // Its press supersedes a release still waiting for the next
+            // frame (egui takes a press while down; this touch's release
+            // ends both).
+            TouchPhase::Began => self.next_frame.clear(),
+            TouchPhase::Cancelled => self.next_frame.push(Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }),
+            TouchPhase::Moved | TouchPhase::Ended => {}
+        }
+        self.this_frame.extend(touch_events(pos, phase));
+    }
+
+    /// The events for the frame about to run.
+    pub fn take_frame(&mut self) -> Vec<Event> {
+        let next = std::mem::take(&mut self.next_frame);
+        std::mem::replace(&mut self.this_frame, next)
+    }
 }
 
 /// The view's `safeAreaInsets`, in points.
@@ -107,13 +149,128 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_releases_and_leaves() {
+    fn cancelled_leaves_without_releasing() {
         let p = Pos2::new(5.0, 6.0);
-        let events = touch_events(p, TouchPhase::Cancelled);
         assert_eq!(
-            events[events.len() - 2..],
-            [button(p, false), Event::PointerGone]
+            touch_events(p, TouchPhase::Cancelled),
+            vec![moved(p), Event::PointerGone]
         );
+    }
+
+    #[test]
+    fn queue_releases_a_cancelled_touch_the_frame_after_it_leaves() {
+        let p = Pos2::new(5.0, 6.0);
+        let mut queue = TouchQueue::default();
+        queue.push(p, TouchPhase::Began);
+        assert_eq!(queue.take_frame(), vec![moved(p), button(p, true)]);
+        queue.push(p, TouchPhase::Cancelled);
+        assert_eq!(queue.take_frame(), vec![moved(p), Event::PointerGone]);
+        assert_eq!(queue.take_frame(), vec![button(p, false)]);
+        assert_eq!(queue.take_frame(), vec![]);
+    }
+
+    #[test]
+    fn queue_puts_a_new_touch_after_the_pending_release() {
+        let a = Pos2::new(5.0, 6.0);
+        let b = Pos2::new(50.0, 60.0);
+        let mut queue = TouchQueue::default();
+        queue.push(a, TouchPhase::Cancelled);
+        let _ = queue.take_frame();
+        queue.push(b, TouchPhase::Began);
+        assert_eq!(
+            queue.take_frame(),
+            vec![button(a, false), moved(b), button(b, true)]
+        );
+    }
+
+    #[test]
+    fn queue_drops_the_pending_release_when_a_touch_begins_in_the_same_frame() {
+        let a = Pos2::new(5.0, 6.0);
+        let b = Pos2::new(50.0, 60.0);
+        let mut queue = TouchQueue::default();
+        queue.push(a, TouchPhase::Cancelled);
+        queue.push(b, TouchPhase::Began);
+        assert_eq!(
+            queue.take_frame(),
+            vec![moved(a), Event::PointerGone, moved(b), button(b, true)]
+        );
+        assert_eq!(queue.take_frame(), vec![]);
+    }
+
+    /// What egui made of a touch on a click-and-drag button: `steps` are
+    /// offsets from the button's centre, one frame each through a
+    /// [`TouchQueue`], then a few empty frames.
+    struct Outcome {
+        clicked: bool,
+        down: bool,
+        dragged: bool,
+    }
+
+    fn on_button(steps: &[(f32, TouchPhase)]) -> Outcome {
+        // One frame: the button's centre and whether it was clicked.
+        fn frame(ctx: &egui::Context, events: Vec<Event>, t: f64) -> (Pos2, bool) {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    egui::vec2(400.0, 800.0),
+                )),
+                time: Some(t),
+                events,
+                ..Default::default()
+            };
+            let mut out = (Pos2::ZERO, false);
+            let mut output = ctx.run_ui(raw, |ui| {
+                let response =
+                    ui.add(egui::Button::new("tap").sense(egui::Sense::click_and_drag()));
+                out = (response.rect.center(), response.clicked());
+            });
+            output.textures_delta.clear(); // egui asserts it is consumed
+            out
+        }
+        let ctx = egui::Context::default();
+        let mut queue = TouchQueue::default();
+        let (center, mut clicked) = frame(&ctx, Vec::new(), 0.0);
+        let mut t = 0.0;
+        for (dy, phase) in steps {
+            t += 0.05;
+            queue.push(center + egui::vec2(0.0, *dy), *phase);
+            clicked |= frame(&ctx, queue.take_frame(), t).1;
+        }
+        for _ in 0..3 {
+            t += 0.05;
+            clicked |= frame(&ctx, queue.take_frame(), t).1;
+        }
+        Outcome {
+            clicked,
+            down: ctx.input(|i| i.pointer.any_down()),
+            dragged: ctx.dragged_id().is_some(),
+        }
+    }
+
+    #[test]
+    fn ended_touch_clicks() {
+        let out = on_button(&[(0.0, TouchPhase::Began), (0.0, TouchPhase::Ended)]);
+        assert!(out.clicked && !out.down);
+    }
+
+    #[test]
+    fn cancelled_touch_never_clicks_nor_stays_down() {
+        let out = on_button(&[(0.0, TouchPhase::Began), (0.0, TouchPhase::Cancelled)]);
+        assert!(!out.clicked && !out.down);
+    }
+
+    #[test]
+    fn cancelled_drag_stops() {
+        use TouchPhase::*;
+        let out = on_button(&[(0.0, Began), (40.0, Moved), (40.0, Cancelled)]);
+        assert!(!out.clicked && !out.down && !out.dragged);
+    }
+
+    #[test]
+    fn a_tap_after_a_cancelled_touch_clicks() {
+        use TouchPhase::*;
+        let out = on_button(&[(0.0, Began), (0.0, Cancelled), (0.0, Began), (0.0, Ended)]);
+        assert!(out.clicked && !out.down);
     }
 
     #[test]

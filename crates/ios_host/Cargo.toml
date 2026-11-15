@@ -26,10 +26,6 @@ egui-wgpu = "0.37.0"
 pollster = "1.0.1"
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDate", "NSObject", "NSRunLoop", "NSSet", "NSString", "NSTimer"] }
-objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "objc2-quartz-core", "UIApplication", "UIEvent", "UIGeometry", "UIInterface", "UIResponder", "UIScene", "UISceneDefinitions", "UISceneOptions", "UISceneSession", "UITouch", "UITraitCollection", "UIView", "UIViewController", "UIWindow", "UIWindowScene"] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "objc2-quartz-core", "UIApplication", "UIEvent", "UIGeometry", "UIInterface", "UIResponder", "UIScene", "UISceneDefinitions", "UISceneOptions", "UISceneSession", "UIScreen", "UITouch", "UITraitCollection", "UIView", "UIViewController", "UIWindow", "UIWindowScene"] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CADisplayLink", "CALayer", "CAMetalLayer", "objc2-metal"] }
 
-[dev-dependencies]
-# egui ships no font by default (the app installs its own); the smoke example
-# needs one to show text.
-egui = { workspace = true, features = ["default_fonts"] }
