@@ -7,6 +7,7 @@
 mod arcs;
 mod circle;
 pub mod fx;
+mod orbits;
 mod strings;
 
 use egui::{Align2, Color32, Rect, Response, Role, Sense, Ui, WidgetInfo, pos2, vec2};
@@ -15,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 pub use arcs::{ArcsStyle, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius};
 pub use circle::{CircleStyle, RingGeom, dot_radius, polygon_visible, ring_gap, ring_layout};
+pub use orbits::{OrbitsStyle, orbits_angle, orbits_ball, orbits_is_ring};
 pub use strings::{StringsStyle, cursor_x, displacement};
 
 use super::widgets;
@@ -203,11 +205,11 @@ fn draw(kind: TopologyKind, ui: &Ui, state: &UiState, rect: Rect, response: &Res
         TopologyKind::Hidden => {}
         TopologyKind::Strings => strings::paint(&painter, &frame, area),
         TopologyKind::Arcs => arcs::paint(&painter, &frame, area),
+        TopologyKind::Orbits => orbits::paint(&painter, &frame, area),
         // The other designs come in later tasks; until then they show the circle.
-        TopologyKind::Circle
-        | TopologyKind::Orbits
-        | TopologyKind::Sweep
-        | TopologyKind::Polygons => circle::paint(&painter, &frame, area),
+        TopologyKind::Circle | TopologyKind::Sweep | TopologyKind::Polygons => {
+            circle::paint(&painter, &frame, area)
+        }
     }
     indicators(&painter, rect, strip, state);
 }

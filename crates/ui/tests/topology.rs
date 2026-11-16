@@ -11,7 +11,7 @@ use pm_ui::state::UiState;
 use pm_ui::theme::{self, Theme};
 use pm_ui::views::topology::{
     self as topo, TopologyKind, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius, cursor_x,
-    displacement, ring_layout, topology,
+    displacement, orbits_angle, orbits_ball, orbits_is_ring, ring_layout, topology,
 };
 
 fn pattern_of(beats: &[u32]) -> Pattern {
@@ -935,4 +935,135 @@ fn arcs_ripple_is_where_the_ball_touched() {
     // measure 2): that beat was absolute 5, odd: the right side.
     let at = arcs_contact(center, r, 2, 3, 2, Some(0.02));
     assert!(at.x > center.x, "{at:?}");
+}
+
+#[test]
+fn orbits_at_gate_on_each_beat() {
+    let center = egui::pos2(100.0, 80.0);
+    for k in 0..8 {
+        let at = orbits_ball(center, 50.0, f64::from(k));
+        assert!(
+            (at.x - 100.0).abs() < 1e-3 && (at.y - 30.0).abs() < 1e-3,
+            "{at:?}"
+        );
+    }
+    // A quarter turn later it is at 3 o'clock; half a turn, at 6.
+    let quarter = orbits_ball(center, 50.0, 2.25);
+    assert!((quarter.x - 150.0).abs() < 1e-3 && (quarter.y - 80.0).abs() < 1e-3);
+    let half = orbits_ball(center, 50.0, 2.5);
+    assert!((half.y - 130.0).abs() < 1e-3);
+    // Constant speed: equal phase steps are equal angle steps.
+    let step = orbits_angle(0.3) - orbits_angle(0.2);
+    assert!((orbits_angle(1.8) - orbits_angle(1.7) - step).abs() < 1e-4);
+}
+
+#[test]
+fn orbits_aligned_at_beat_one() {
+    let center = egui::pos2(100.0, 80.0);
+    for r in [30.0, 55.0, 95.0] {
+        let at = orbits_ball(center, r, 0.0);
+        assert!((at.x - center.x).abs() < 1e-3 && at.y < center.y, "{at:?}");
+    }
+}
+
+#[test]
+fn orbits_fast_pulse_becomes_ring() {
+    // 8 beats against a reference of 1 at 300 BPM: a turn lasts 0.2 / 8 = 25 ms.
+    let mut state = playing(&[1, 8]);
+    state.bpm = pm_core::Bpm::new(300);
+    hit(&mut state, &[(0, 0, 100)]);
+    let frame = topo::frame(&state);
+    assert!((frame.measure_secs - 0.2).abs() < 1e-9);
+    assert!(orbits_is_ring(frame.measure_secs, 8));
+    assert!(!orbits_is_ring(frame.measure_secs, 1));
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let fast = paint_once(&ctx, &state, TopologyKind::Orbits, 360.0);
+    // The same pattern slowly: the 8-beat pulse gets its ball and trail back.
+    state.bpm = pm_core::Bpm::new(40);
+    hit(&mut state, &[(0, 0, 100)]);
+    assert!(!orbits_is_ring(topo::frame(&state).measure_secs, 8));
+    let slow = paint_once(&ctx, &state, TopologyKind::Orbits, 360.0);
+    assert!(fast < slow, "{fast} vs {slow}");
+}
+
+#[test]
+fn orbits_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    state.bpm = pm_core::Bpm::new(40);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Orbits, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+    // Also with a slow reference and fast others, and the other way round.
+    let mut state = playing(&[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 1024]);
+    state.bpm = pm_core::Bpm::new(40);
+    hit_all_at(&mut state, 2, Instant::now(), Duration::from_millis(40));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Orbits, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+/// `state` lit `age` after its hits, painted as Orbits in a card-sized square.
+fn orbits_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
+    let Some(renderer) = renderer() else {
+        eprintln!("SKIPPED {name}: no wgpu adapter available");
+        return;
+    };
+    state.topology = TopologyKind::Orbits;
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    let ids = ids(&state);
+    for &(i, beat, frame) in hits {
+        state.on_beat(&BeatEvent {
+            pulse: ids[i],
+            beat,
+            frame,
+            at,
+            muted: false,
+        });
+    }
+    state.advance(at + age, 0.0);
+    let size = 360.0;
+    let mut h = Harness::builder()
+        .with_size(Vec2::splat(size + 16.0))
+        .with_context_setup(theme::install)
+        .renderer(renderer)
+        .build_ui_state(
+            move |ui, state: &mut UiState| {
+                let card = state.theme.card;
+                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
+                let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::splat(size));
+                topo::paint(TopologyKind::Orbits, ui, state, rect);
+            },
+            state,
+        );
+    h.run();
+    h.snapshot_options(
+        name,
+        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
+    );
+}
+
+#[test]
+fn topology_orbits_hit_dark() {
+    orbits_snapshot(
+        "topology_orbits_hit_dark",
+        pt_br(playing(&[3, 4, 5])),
+        &[(0, 1, 100), (1, 2, 100), (2, 0, 100)],
+        Duration::from_millis(40),
+    );
+}
+
+#[test]
+fn topology_orbits_many_light() {
+    let mut state = pt_br(playing(&[3, 4, 5, 7, 8, 9, 11, 13]));
+    state.theme = Arc::new(Theme::builtin("light").unwrap());
+    orbits_snapshot(
+        "topology_orbits_many_light",
+        state,
+        &[(0, 1, 100), (2, 3, 100), (5, 4, 100)],
+        Duration::from_millis(30),
+    );
 }
