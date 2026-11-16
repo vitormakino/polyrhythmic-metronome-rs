@@ -512,6 +512,21 @@ impl UiState {
         shown(pulse.enabled, mask, index)
     }
 
+    /// Whether the running session silences pulse `index` (0-based) in the
+    /// bar it plays now: the pulse is muted, or the whole bar is. Its beats
+    /// still sound nowhere; the topology draws it dimmed, without effects.
+    /// False when the plan shows its muted beats (`show_muted_visuals`).
+    pub fn pulse_silenced(&self, index: usize) -> bool {
+        let bit = 1u16.checked_shl(index as u32).unwrap_or(0);
+        let shows_muted = self
+            .shown_session()
+            .is_some_and(|s| s.plan.show_muted_visuals);
+        !shows_muted
+            && self
+                .running_session()
+                .is_some_and(|p| p.moment.silent || p.moment.pulses.muted & bit != 0)
+    }
+
     /// Whether the running session's stage overrides pulse `index` (0-based):
     /// off, muted or forced on.
     pub fn pulse_overridden(&self, index: usize) -> bool {

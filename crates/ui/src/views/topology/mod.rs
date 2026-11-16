@@ -97,8 +97,10 @@ pub struct PulseView {
     pub color: Color32,
     /// Beats in the pulse's cycle (at least 1).
     pub beats: u32,
-    /// Shown enabled (the session's mask applied). A disabled pulse keeps
-    /// moving, dimmed, with no effects.
+    /// Drawn at full strength: shown enabled (the session's mask applied)
+    /// and not silenced by the session in this bar
+    /// ([`UiState::pulse_silenced`]). Otherwise the pulse keeps moving,
+    /// dimmed, with no effects.
     pub enabled: bool,
     /// Position in its cycle ([`UiState::pulse_phase`]): the integer part is
     /// the beat, the fraction the way to the next. `None` while stopped.
@@ -144,7 +146,7 @@ pub fn frame(state: &UiState) -> TopologyFrame<'_> {
         .enumerate()
         .map(|(i, p)| {
             let beats = p.beats.max(1);
-            let enabled = state.pulse_shown_enabled(i);
+            let enabled = state.pulse_shown_enabled(i) && !state.pulse_silenced(i);
             let hit = state
                 .hit(p.id)
                 .filter(|h| state.playing && enabled && h.beat < beats);
