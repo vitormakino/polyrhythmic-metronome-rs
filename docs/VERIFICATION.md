@@ -466,6 +466,41 @@ the README's example saved as `sessions/warmup.toml`:
 
 Record the result here: date, macOS version, editor, what differed.
 
+## Topologies
+
+### Drawings against the click, load, sessions, Hidden, saved choice
+
+Status: PENDING (owner). The agent ran the automated tests (including a
+shape budget per drawing at 16 pulses and 1024 beats) and the iOS simulator
+smoke test; judging timing against the sound, smoothness and the feel of the
+height needs a Mac and an iPhone.
+
+Run on the iPhone (Release build, as in the iPhone section) and on the Mac
+(`cargo run --release -p polyrhythmic-metronome-app`). Pick each drawing in
+the footer's gear popover.
+
+1. **Touch the mark on the click.** For each drawing, play 4 against 3 at
+   40 BPM and at 300 BPM. Expected: on every click the moving part touches
+   its mark exactly (ball on the base or the gate, cursor on the string's
+   mark, point on the vertex, hand on the mark); no visible lead or lag.
+2. **No stutter with 16 pulses.** Add pulses up to 16 and play each drawing.
+   Expected: smooth motion, effects thin out instead of piling up, and the
+   click is unaffected.
+3. **Session ramp.** Start a session with a tempo ramp. Expected: the
+   drawing speeds up smoothly, with no jumps, and returns to the "one" pose
+   on Stop.
+4. **Hidden gives the list the height.** Pick Hidden. Expected: the pulse
+   list uses the freed height, and the coincidence and engine lights appear
+   in the "ACTIVE PULSES" header.
+5. **The choice survives a restart.** Pick a drawing other than Circle, quit
+   (on the iPhone, close it from the app switcher) and open the app again.
+   Expected: the same drawing is selected.
+6. **Mini window (Mac).** Switch to the mini window. Expected: it shows the
+   Circle whatever the choice, and the full window returns to the chosen
+   drawing.
+
+Record the result here: date, device and OS version, what differed.
+
 ## iPhone
 
 ### Touch, sound, background, interruptions, saved state

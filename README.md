@@ -186,6 +186,32 @@ and eframe picks that up:
 - **Device changes:** the app follows the macOS default output. Plugging or
   unplugging headphones continues from the same point in the measure.
 
+## Topologies
+
+The rhythm drawing above the pulse list comes in several styles. Pick one in
+the footer's gear popover, under the visual offset slider. It applies at once
+and is remembered across restarts (saved as `topology` in `settings.toml`; a
+missing or unknown value falls back to Circle). The mini window always shows
+the Circle.
+
+| Name | What it shows |
+|------|---------------|
+| Circle | One ring per pulse with a dot per beat; each beat sends out a wave and a few sparks. |
+| Strings | One horizontal line per pulse and a cursor that crosses once per measure; the string is plucked at the beat's mark and vibrates. A low drawing that grows with the pulse count, up to a cap. |
+| Arcs | One half circle per pulse on a shared base. Each pulse's ball crosses its arc once per beat, alternating direction, and hits the base on the beat. |
+| Clock — orbits | One ring per pulse; its ball makes one turn per beat and crosses the 12 o'clock gate on the beat. |
+| Clock — sweep | One hand makes one turn per measure; each pulse has a ring of marks that light as the hand passes. |
+| Polygons | One polygon per pulse (n beats, n vertices); a point walks the edges and reaches a vertex on each beat. |
+| Hidden | Draws nothing and takes no space, so the pulse list gets the full height. The coincidence and engine lights move to the "ACTIVE PULSES" header. |
+
+In every drawing, continuous motion runs at constant speed, a beat is the
+moment something touches a fixed point, and on the "one" everything starts
+together. When all enabled pulses land on the "one" together, the drawing
+glows and shakes lightly. Pulses that are off, or silenced by a session, keep
+moving dimmed, without effects. Stopped, the drawing rests in its "one" pose.
+Drawings are timed at the same instant as the sound (plus the visual offset)
+and never touch the audio engine.
+
 ## Keyboard shortcuts and menu bar
 
 Global hotkeys work while another app has the focus:
@@ -324,7 +350,7 @@ should be underlined.
 |------|------|
 | `crates/core` | Domain model, exact timeline (scheduler), live edits, click synthesis, tap tempo. No I/O. |
 | `crates/audio` | Real-time engine and the CoreAudio stream (cpal) that follows the default output. |
-| `crates/ui` | egui views: full window, rhythm topology, mini window, theme. |
+| `crates/ui` | egui views: full window, rhythm topologies, mini window, theme. |
 | `crates/shell` | What the Mac and iPhone apps share: controller, settings, frame loop. |
 | `crates/app` | The `polyrhythmic-metronome` binary: windows, settings, menu bar, hotkeys. |
 | `crates/ios_host` | iPhone host: UIKit scene, Metal rendering and touch input for egui. |
