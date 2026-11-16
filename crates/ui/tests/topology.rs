@@ -9,7 +9,9 @@ use pm_core::{Pattern, PulseId};
 use pm_ui::i18n::Messages;
 use pm_ui::state::UiState;
 use pm_ui::theme::{self, Theme};
-use pm_ui::views::topology::{self as topo, TopologyKind, ring_layout, topology};
+use pm_ui::views::topology::{
+    self as topo, TopologyKind, cursor_x, displacement, ring_layout, topology,
+};
 
 fn pattern_of(beats: &[u32]) -> Pattern {
     let mut pattern = Pattern::default();
@@ -623,4 +625,131 @@ fn first_hit_after_play_has_no_prev() {
     hit(&mut state, &[(0, 0, 500)]);
     state.pattern.set_beats(id, 2);
     assert_eq!(topo::frame(&state).pulses[0].prev, None);
+}
+
+#[test]
+fn strings_cursor_at_phase() {
+    let track = egui::Rect::from_min_max(egui::pos2(10.0, 0.0), egui::pos2(110.0, 50.0));
+    assert_eq!(cursor_x(track, 0.0), 10.0);
+    assert!((cursor_x(track, 0.25) - 35.0).abs() < 1e-4);
+    assert!((cursor_x(track, 1.0) - 110.0).abs() < 1e-4);
+}
+
+#[test]
+fn strings_pluck_is_zero_at_ends() {
+    for pluck in [0.0, 0.25, 0.5, 1.0] {
+        for age in [0.0, 0.01, 0.05, 0.3] {
+            assert_eq!(displacement(0.0, pluck, age), 0.0, "{pluck} {age}");
+            assert_eq!(displacement(1.0, pluck, age), 0.0, "{pluck} {age}");
+        }
+    }
+    // It does move in the middle, and dies away.
+    assert!(displacement(0.5, 0.5, 0.03).abs() > 1.0);
+    assert!(displacement(0.5, 0.5, 5.0).abs() < 1e-3);
+}
+
+#[test]
+fn strings_at_rest_when_stopped() {
+    let mut state = playing(&[4, 3, 5]);
+    hit(&mut state, &[(0, 2, 10), (1, 1, 10)]);
+    state.playing = false;
+    let frame = topo::frame(&state);
+    assert!(!frame.playing);
+    for pulse in &frame.pulses {
+        assert_eq!(pulse.hit, None);
+        let age = pulse.hit.map_or(f32::INFINITY, |h| h.age);
+        for k in 0..=10 {
+            assert_eq!(displacement(k as f32 / 10.0, 0.5, age), 0.0);
+        }
+    }
+}
+
+#[test]
+fn strings_shape_per_pulse_count() {
+    use topo::Shape;
+    let height = |n: usize| match topo::shape(TopologyKind::Strings, &playing(&vec![4; n])) {
+        Shape::Low(h) => h,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(height(1), 50.0);
+    assert_eq!(height(3), 94.0);
+    assert_eq!(height(8), 200.0);
+    assert_eq!(height(16), 200.0);
+}
+
+#[test]
+fn strings_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Strings, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+/// `state` lit `age` after its hits, painted as Strings in a card-sized low band.
+fn strings_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
+    let Some(renderer) = renderer() else {
+        eprintln!("SKIPPED {name}: no wgpu adapter available");
+        return;
+    };
+    state.topology = TopologyKind::Strings;
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    let ids = ids(&state);
+    for &(i, beat, frame) in hits {
+        state.on_beat(&BeatEvent {
+            pulse: ids[i],
+            beat,
+            frame,
+            at,
+            muted: false,
+        });
+    }
+    state.advance(at + age, 0.0);
+    let topo::Shape::Low(height) = topo::shape(TopologyKind::Strings, &state) else {
+        panic!("strings are low");
+    };
+    let width = 360.0;
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(width + 16.0, height + 16.0))
+        .with_context_setup(theme::install)
+        .renderer(renderer)
+        .build_ui_state(
+            move |ui, state: &mut UiState| {
+                let card = state.theme.card;
+                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
+                let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::new(width, height));
+                topo::paint(TopologyKind::Strings, ui, state, rect);
+            },
+            state,
+        );
+    h.run();
+    h.snapshot_options(
+        name,
+        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
+    );
+}
+
+#[test]
+fn topology_strings_hit_dark() {
+    strings_snapshot(
+        "topology_strings_hit_dark",
+        pt_br(playing(&[3, 4, 5])),
+        &[(0, 1, 100), (1, 2, 100), (2, 0, 100)],
+        Duration::from_millis(30),
+    );
+}
+
+#[test]
+fn topology_strings_many_light() {
+    let mut state = pt_br(playing(&[17, 23, 4, 5, 6, 32, 64, 12]));
+    state.theme = Arc::new(Theme::builtin("light").unwrap());
+    strings_snapshot(
+        "topology_strings_many_light",
+        state,
+        &[(0, 5, 100), (1, 11, 100), (5, 31, 100), (6, 40, 100)],
+        Duration::from_millis(30),
+    );
 }

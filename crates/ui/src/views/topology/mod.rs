@@ -6,12 +6,14 @@
 
 mod circle;
 pub mod fx;
+mod strings;
 
 use egui::{Align2, Color32, Rect, Response, Role, Sense, Ui, WidgetInfo, pos2, vec2};
 use pm_core::PulseId;
 use serde::{Deserialize, Serialize};
 
 pub use circle::{CircleStyle, RingGeom, dot_radius, polygon_visible, ring_gap, ring_layout};
+pub use strings::{StringsStyle, cursor_x, displacement};
 
 use super::widgets;
 use crate::state::{Hit, UiState};
@@ -66,13 +68,14 @@ pub enum Shape {
 }
 
 /// The shape `kind` wants for `state`'s pattern.
-pub fn shape(kind: TopologyKind, _state: &UiState) -> Shape {
+pub fn shape(kind: TopologyKind, state: &UiState) -> Shape {
     match kind {
+        TopologyKind::Strings => {
+            Shape::Low((28.0 + 22.0 * state.pattern.pulses.len() as f32).min(200.0))
+        }
         TopologyKind::Arcs => Shape::Aspect(2.0),
         TopologyKind::Hidden => Shape::Hidden,
-        // Strings becomes `Low` once it is drawn.
         TopologyKind::Circle
-        | TopologyKind::Strings
         | TopologyKind::Orbits
         | TopologyKind::Sweep
         | TopologyKind::Polygons => Shape::Square,
@@ -189,9 +192,9 @@ fn draw(kind: TopologyKind, ui: &Ui, state: &UiState, rect: Rect, response: &Res
     let frame = frame(state);
     match kind {
         TopologyKind::Hidden => {}
+        TopologyKind::Strings => strings::paint(&painter, &frame, area),
         // The other designs come in later tasks; until then they show the circle.
         TopologyKind::Circle
-        | TopologyKind::Strings
         | TopologyKind::Arcs
         | TopologyKind::Orbits
         | TopologyKind::Sweep
