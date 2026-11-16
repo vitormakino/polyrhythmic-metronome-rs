@@ -1,6 +1,6 @@
 //! What survives a restart: pattern, tempo, window mode and rects, the
-//! visual offset per output device, the selected practice session and whether
-//! the example sessions were written. Stored as TOML in
+//! visual offset per output device, the selected practice session, the
+//! topology drawing and whether the example sessions were written. Stored as TOML in
 //! `dirs::data_dir()/polyrhythmic-metronome/settings.toml`.
 
 use std::collections::BTreeMap;
@@ -12,6 +12,7 @@ use pm_core::{Bpm, Pattern};
 use pm_ui::state::WindowMode;
 use pm_ui::views::footer::MAX_VISUAL_OFFSET_MS;
 use pm_ui::views::mini;
+use pm_ui::views::topology::TopologyKind;
 use serde::Serialize;
 
 use pm_ui::views::full::MIN_SIZE as FULL_MIN_SIZE;
@@ -31,6 +32,8 @@ pub struct Settings {
     pub visual_offsets: BTreeMap<String /*device uid*/, u32 /*ms*/>,
     /// Name of the selected practice session; `None` is "No session".
     pub session: Option<String>,
+    /// The topology drawing chosen in the settings popover.
+    pub topology: TopologyKind,
     /// The example sessions were written once; they are not written again.
     pub examples_created: bool,
 }
@@ -45,6 +48,7 @@ impl Default for Settings {
             mini_rect: None,
             visual_offsets: BTreeMap::new(),
             session: None,
+            topology: TopologyKind::Circle,
             examples_created: false,
         }
     }
@@ -93,6 +97,7 @@ impl Settings {
             mini_rect: field(&table, "mini_rect").and_then(|r| valid_rect(r, mini::MIN_SIZE)),
             visual_offsets,
             session: field(&table, "session"),
+            topology: field(&table, "topology").unwrap_or(defaults.topology),
             examples_created: field(&table, "examples_created").unwrap_or(false),
         }
     }
@@ -170,6 +175,7 @@ mod tests {
                 ("BuiltInSpeakerDevice".to_owned(), 0),
             ]),
             session: Some("Warm-up".to_owned()),
+            topology: TopologyKind::Arcs,
             examples_created: true,
         }
     }
@@ -211,6 +217,39 @@ mod tests {
         s.session = Some("Warm-up \"fast\"".to_owned());
         s.save(&dir.0).unwrap();
         assert_eq!(Settings::load(&dir.0), s);
+    }
+
+    #[test]
+    fn topology_defaults_to_circle_when_missing() {
+        let dir = TempDir::new();
+        write(&dir.0, "bpm = 90\n");
+        let s = Settings::load(&dir.0);
+        assert_eq!(s.topology, TopologyKind::Circle);
+        assert_eq!(s.bpm.get(), 90);
+    }
+
+    #[test]
+    fn unknown_topology_loads_as_circle() {
+        let dir = TempDir::new();
+        write(&dir.0, "bpm = 90\ntopology = \"spiral\"\n");
+        let s = Settings::load(&dir.0);
+        assert_eq!(s.topology, TopologyKind::Circle);
+        assert_eq!(s.bpm.get(), 90, "the other fields still load");
+    }
+
+    #[test]
+    fn topology_round_trips() {
+        let dir = TempDir::new();
+        for kind in TopologyKind::ALL {
+            let s = Settings {
+                topology: kind,
+                ..edited()
+            };
+            s.save(&dir.0).unwrap();
+            assert_eq!(Settings::load(&dir.0), s, "{kind:?}");
+        }
+        let text = std::fs::read_to_string(dir.0.join(FILE)).unwrap();
+        assert!(text.contains("topology = \"hidden\""), "{text}");
     }
 
     #[test]

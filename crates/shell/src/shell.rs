@@ -143,7 +143,7 @@ pub struct Shell<A: Audio = AudioService> {
 
 impl<A: Audio + Device> Shell<A> {
     /// Starts from the saved `settings` (pattern, tempo, mode, session,
-    /// window, offsets) over `ui` (language, theme, platform switches);
+    /// topology, window, offsets) over `ui` (language, theme, platform switches);
     /// saves into `settings_dir`, if any.
     pub fn new(
         audio: A,
@@ -155,6 +155,7 @@ impl<A: Audio + Device> Shell<A> {
         ui.pattern = settings.pattern.clone();
         ui.bpm = settings.bpm;
         ui.mode = settings.mode;
+        ui.topology = settings.topology;
         // Kept only if the loaded sessions have it (`Controller::set_sessions`).
         ui.session = settings.session.clone();
         let mut shell = Shell {
@@ -317,6 +318,7 @@ impl<A: Audio + Device> Shell<A> {
             mini_rect: self.window.mini_rect,
             visual_offsets: self.visual_offsets.clone(),
             session: self.ctl.ui.session.clone(),
+            topology: self.ctl.ui.topology,
             // Set and saved by the host at startup, before the app runs.
             examples_created: self.saved.examples_created,
         }
@@ -364,6 +366,7 @@ mod tests {
     use std::collections::VecDeque;
 
     use pm_audio::{Command, OutputLatency};
+    use pm_ui::views::topology::TopologyKind;
 
     use super::*;
 
@@ -567,6 +570,19 @@ mod tests {
         s.audio.uid = Some("a".to_owned());
         s.logic(start + 2 * TICK, true);
         assert_eq!(s.ctl.ui.visual_offset, offset);
+    }
+
+    #[test]
+    fn topology_comes_from_the_settings_and_goes_back_to_them() {
+        let settings = Settings {
+            topology: TopologyKind::Arcs,
+            ..Settings::default()
+        };
+        let mut s = Shell::new(Fake::default(), UiState::default(), &settings, None);
+        assert_eq!(s.ctl.ui.topology, TopologyKind::Arcs);
+        assert_eq!(s.settings().topology, TopologyKind::Arcs);
+        s.ctl.ui.topology = TopologyKind::Hidden;
+        assert_eq!(s.settings().topology, TopologyKind::Hidden);
     }
 
     #[test]

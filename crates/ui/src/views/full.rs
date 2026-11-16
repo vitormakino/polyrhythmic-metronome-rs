@@ -20,7 +20,7 @@ use super::bpm_card::bpm_card;
 use super::footer::{self, footer};
 use super::pulse_card::{Grid, pulse_list};
 use super::session_strip::{self, session_strip};
-use super::topology::topology_in;
+use super::topology::{self, Shape, TopologyKind};
 use super::widgets;
 use crate::state::{UiAction, UiState};
 use crate::theme;
@@ -34,6 +34,8 @@ const MAX_CONTENT_WIDTH: f32 = 1100.0;
 const GAP: f32 = 12.0;
 /// The topology card shows its title from this width.
 const TITLE_MIN_WIDTH: f32 = 220.0;
+/// Space around the indicators in the pulses header (topology hidden).
+const HEADER_GAP: f32 = 8.0;
 
 /// Draws the full window into `ui`, editing `state`; returns what the app must forward.
 /// `now` timestamps taps.
@@ -43,7 +45,8 @@ pub fn full_view(ui: &mut Ui, state: &mut UiState, now: Instant) -> Vec<UiAction
     let screen = ui.max_rect();
     ui.painter().rect_filled(screen, 0.0, t.bg);
     state.keep_session_summary();
-    let mut layout = Layout::new(screen, session_strip::strip_height(state));
+    let shape = topology::shape(state.topology, state);
+    let mut layout = Layout::new(screen, session_strip::strip_height(state), shape);
 
     top_bar(ui, layout.top, state, layout.wide);
     bpm_card(ui, layout.bpm, state, now, layout.wide, &mut actions);
@@ -94,8 +97,9 @@ fn row(top: f32, height: f32, left: f32, right: f32) -> Rect {
 }
 
 impl Layout {
-    /// `strip_h` is the session strip's height, 0 for none.
-    fn new(screen: Rect, strip_h: f32) -> Self {
+    /// `strip_h` is the session strip's height, 0 for none; `shape` is the
+    /// room the chosen topology asks for.
+    fn new(screen: Rect, strip_h: f32, shape: Shape) -> Self {
         let wide = screen.width() >= WIDE_MIN;
         let pad = if wide { 24.0 } else { 16.0 };
         let mut content = screen.shrink(pad);
@@ -125,11 +129,18 @@ impl Layout {
             let header = row(bpm.bottom() + 20.0, 28.0, ll, lr);
             let list = Rect::from_min_max(pos2(ll, header.bottom() + 8.0), pos2(lr, above - 12.0));
             let right = Rect::from_min_max(pos2(lr + column_gap, body_top), content.max);
-            let side = right.width().min(right.height());
-            let topology = Rect::from_min_size(
-                pos2(right.center().x - side / 2.0, right.top()),
-                Vec2::splat(side),
-            );
+            // Centred at the top of the right column; Hidden leaves it empty.
+            let size = match shape {
+                Shape::Square => Vec2::splat(right.width().min(right.height())),
+                Shape::Aspect(a) => {
+                    let w = right.width().min(right.height() * a);
+                    vec2(w, w / a)
+                }
+                Shape::Low(h) => vec2(right.width(), h.min(right.height())),
+                Shape::Hidden => Vec2::ZERO,
+            };
+            let topology =
+                Rect::from_min_size(pos2(right.center().x - size.x / 2.0, right.top()), size);
             Layout {
                 wide,
                 top,
@@ -151,13 +162,22 @@ impl Layout {
             // What is left between the tempo card and the play button (or
             // the session strip) goes half to the topology, half to the pulse list.
             let flex = (above - GAP - (bpm.bottom() + GAP) - GAP - header_h - 8.0).max(0.0);
-            let side = (flex * 0.5).min(content.width()).floor();
-            // A square too small for the title becomes a full-width card
-            // instead: the diagram shrinks, the title stays.
-            let topology_size = if side < TITLE_MIN_WIDTH {
-                vec2(content.width(), side)
-            } else {
-                Vec2::splat(side)
+            let half = flex * 0.5;
+            let width = content.width();
+            let topology_size = match shape {
+                Shape::Square => {
+                    let side = half.min(width).floor();
+                    // A square too small for the title becomes a full-width card
+                    // instead: the diagram shrinks, the title stays.
+                    if side < TITLE_MIN_WIDTH {
+                        vec2(width, side)
+                    } else {
+                        Vec2::splat(side)
+                    }
+                }
+                Shape::Aspect(a) => vec2(width, (width / a).min(half).floor()),
+                Shape::Low(h) => vec2(width, h.min(half).floor()),
+                Shape::Hidden => vec2(width, 0.0),
             };
             let topology = Rect::from_min_size(
                 pos2(
@@ -166,7 +186,13 @@ impl Layout {
                 ),
                 topology_size,
             );
-            let header = row(topology.bottom() + GAP, header_h, l, r);
+            // Hidden takes no gap either: the header moves up under the tempo card.
+            let header_top = if shape == Shape::Hidden {
+                bpm.bottom() + GAP
+            } else {
+                topology.bottom() + GAP
+            };
+            let header = row(header_top, header_h, l, r);
             let list = Rect::from_min_max(pos2(l, header.bottom() + 8.0), pos2(r, above - GAP));
             Layout {
                 wide,
@@ -217,7 +243,7 @@ fn top_bar(ui: &Ui, rect: Rect, state: &UiState, wide: bool) {
 
 fn topology_card(ui: &mut Ui, rect: Rect, state: &UiState) {
     let t = &state.theme;
-    if rect.width() < 1.0 {
+    if state.topology == TopologyKind::Hidden || rect.width() < 1.0 || rect.height() < 1.0 {
         return;
     }
     let painter = ui.painter();
@@ -264,14 +290,14 @@ fn topology_card(ui: &mut Ui, rect: Rect, state: &UiState) {
         Rect::from_center_size(rect.center(), Vec2::splat(side))
     };
     ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
-        topology_in(ui, state, area.width(), side);
+        topology::paint(state.topology, ui, state, area);
     });
 }
 
 fn pulses_header(ui: &Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiAction>) {
     let t = state.theme.clone();
     let painter = ui.painter();
-    widgets::text(
+    let title = widgets::text(
         painter,
         pos2(rect.left() + 4.0, rect.center().y),
         Align2::LEFT_CENTER,
@@ -287,6 +313,23 @@ fn pulses_header(ui: &Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiA
     // padding 12 | plus 12 | gap 6 | text | padding 12
     let w = 12.0 + 12.0 + 6.0 + text_w + 12.0;
     let r = Rect::from_min_max(pos2(rect.right() - w, rect.top()), rect.right_bottom());
+    if state.topology == TopologyKind::Hidden {
+        // No drawing to sit under: the lights go between the title and the button.
+        let slot = Rect::from_x_y_ranges(
+            title.right() + HEADER_GAP..=r.left() - HEADER_GAP,
+            rect.y_range(),
+        );
+        let (coincidence, engine) = topology::indicators(painter, slot, slot.height(), state);
+        for (key, label, painted) in [
+            ("header-coincidence", &m.coincidence, Some(coincidence)),
+            ("header-engine", &m.engine, engine),
+        ] {
+            if let Some(painted) = painted {
+                let node = ui.interact(painted, ui.make_persistent_id(key), Sense::hover());
+                node.widget_info(|| WidgetInfo::labeled(Role::Label, true, label));
+            }
+        }
+    }
     let enabled = state.pattern.pulses.len() < MAX_PULSES;
     let resp = widgets::button(
         ui,
@@ -390,5 +433,58 @@ pub(super) fn play_button(
             state.clear_beats();
         }
         actions.push(UiAction::TogglePlay);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn screen(size: Vec2) -> Rect {
+        Rect::from_min_size(pos2(0.0, 0.0), size)
+    }
+
+    #[test]
+    fn low_shape_caps_at_half_the_flex() {
+        let narrow = screen(MIN_SIZE);
+        // At the minimum size the square is already "half of the flex", full width.
+        let square = Layout::new(narrow, 0.0, Shape::Square).topology;
+        let half = square.height();
+        assert!(half > 40.0 && half < 300.0, "{square:?}");
+        let tall = Layout::new(narrow, 0.0, Shape::Low(1000.0));
+        assert_eq!(tall.topology.height(), half, "capped");
+        assert_eq!(tall.topology.width(), square.width());
+        let low = Layout::new(narrow, 0.0, Shape::Low(40.0));
+        assert_eq!(low.topology.height(), 40.0, "its own height when it fits");
+        assert_eq!(low.header.top(), low.topology.bottom() + GAP);
+        assert!(low.list.height() > tall.list.height());
+    }
+
+    #[test]
+    fn aspect_takes_the_full_width_capped_at_half_the_flex() {
+        let narrow = screen(vec2(375.0, 900.0));
+        let arcs = Layout::new(narrow, 0.0, Shape::Aspect(2.0)).topology;
+        assert_eq!(arcs.width(), 343.0, "content width");
+        assert_eq!(arcs.height(), (343.0f32 / 2.0).floor());
+        let short = screen(MIN_SIZE);
+        let half = Layout::new(short, 0.0, Shape::Square).topology.height();
+        let arcs = Layout::new(short, 0.0, Shape::Aspect(2.0)).topology;
+        assert_eq!(arcs.height(), half, "capped at half the flex");
+    }
+
+    #[test]
+    fn hidden_takes_no_room_in_either_layout() {
+        let narrow = Layout::new(screen(MIN_SIZE), 0.0, Shape::Hidden);
+        assert_eq!(narrow.topology.height(), 0.0);
+        assert_eq!(narrow.header.top(), narrow.bpm.bottom() + GAP);
+        let wide = Layout::new(screen(vec2(900.0, 700.0)), 0.0, Shape::Hidden);
+        assert_eq!(wide.topology.size(), Vec2::ZERO);
+        // Wide: the shape sits centred at the top of the right column.
+        let square = Layout::new(screen(vec2(900.0, 700.0)), 0.0, Shape::Square).topology;
+        let arcs = Layout::new(screen(vec2(900.0, 700.0)), 0.0, Shape::Aspect(2.0)).topology;
+        assert_eq!(arcs.top(), square.top());
+        assert_eq!(arcs.center().x, square.center().x);
+        assert_eq!(arcs.width(), square.width());
+        assert_eq!(arcs.height(), square.width() / 2.0);
     }
 }

@@ -205,8 +205,16 @@ fn strip_height(size: f32) -> f32 {
     (size * 0.1).clamp(18.0, 30.0)
 }
 
-/// Coincidence light and engine status in the strip under the drawing.
-fn indicators(painter: &egui::Painter, rect: Rect, strip: f32, state: &UiState) {
+/// Coincidence light and engine status, centred in the bottom `strip`
+/// points of `rect`: under the drawing, or in the pulses header when the
+/// topology is hidden. Returns the painted labels' rects, coincidence first;
+/// the engine's is `None` when `rect` is too narrow for both.
+pub(crate) fn indicators(
+    painter: &egui::Painter,
+    rect: Rect,
+    strip: f32,
+    state: &UiState,
+) -> (Rect, Option<Rect>) {
     const LIGHT: f32 = 3.0;
     const SPACING: f32 = 1.2;
     const GAP: f32 = 6.0;
@@ -238,7 +246,7 @@ fn indicators(painter: &egui::Painter, rect: Rect, strip: f32, state: &UiState) 
         painter.circle_filled(light, LIGHT, t.border);
     }
     x += light_w + GAP;
-    widgets::text(
+    let coincidence = widgets::text(
         painter,
         pos2(x, y),
         Align2::LEFT_CENTER,
@@ -247,23 +255,25 @@ fn indicators(painter: &egui::Painter, rect: Rect, strip: f32, state: &UiState) 
         t.text_muted,
         SPACING,
     );
-    if both {
-        x += coincidence_w + BETWEEN;
-        widgets::text(
-            painter,
-            pos2(x, y),
-            Align2::LEFT_CENTER,
-            &m.engine,
-            font,
-            t.text_muted,
-            SPACING,
-        );
-        let light = pos2(x + engine_w + GAP + light_w / 2.0, y);
-        if state.playing {
-            theme::paint_glow(painter, light, 8.0, t.accent, 0.8);
-            painter.circle_filled(light, LIGHT, t.accent);
-        } else {
-            painter.circle_filled(light, LIGHT, t.dot_inactive);
-        }
+    if !both {
+        return (coincidence, None);
     }
+    x += coincidence_w + BETWEEN;
+    let engine = widgets::text(
+        painter,
+        pos2(x, y),
+        Align2::LEFT_CENTER,
+        &m.engine,
+        font,
+        t.text_muted,
+        SPACING,
+    );
+    let light = pos2(x + engine_w + GAP + light_w / 2.0, y);
+    if state.playing {
+        theme::paint_glow(painter, light, 8.0, t.accent, 0.8);
+        painter.circle_filled(light, LIGHT, t.accent);
+    } else {
+        painter.circle_filled(light, LIGHT, t.dot_inactive);
+    }
+    (coincidence, Some(engine))
 }
