@@ -54,6 +54,7 @@ pub(crate) fn pulse_list(
     let mut edits = Vec::new();
     let mut drag = DragOutcome::default();
     ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+        style_scroll_bar(ui, &state.theme);
         ScrollArea::vertical()
             .id_salt("pulse-list")
             .auto_shrink(false)
@@ -104,6 +105,32 @@ pub(crate) fn pulse_list(
     if changed {
         actions.push(UiAction::PatternChanged);
     }
+}
+
+/// The list's scroll bar in the theme's colors: a thin handle that always
+/// shows how far the list goes, widening while it is held. It floats in the
+/// room the grid leaves for it, so it never covers a card.
+fn style_scroll_bar(ui: &mut Ui, t: &Theme) {
+    let style = ui.style_mut();
+    let bar = &mut style.spacing.scroll;
+    bar.floating = true;
+    bar.bar_width = SCROLL_BAR_ROOM - 2.0;
+    bar.floating_width = 3.0;
+    bar.floating_allocated_width = 0.0;
+    bar.bar_inner_margin = 0.0;
+    bar.handle_min_length = 24.0;
+    // The handle takes `fg_stroke` of the widget state it is in.
+    bar.foreground_color = true;
+    bar.dormant_handle_opacity = 0.7;
+    bar.active_handle_opacity = 1.0;
+    bar.interact_handle_opacity = 1.0;
+    bar.dormant_background_opacity = 0.0;
+    bar.active_background_opacity = 0.0;
+    bar.interact_background_opacity = 0.0;
+    let w = &mut style.visuals.widgets;
+    w.inactive.fg_stroke = Stroke::new(1.0, t.dot_inactive);
+    w.hovered.fg_stroke = Stroke::new(1.0, t.text_muted);
+    w.active.fg_stroke = Stroke::new(1.0, t.accent);
 }
 
 /// Card sizes and positions (relative to the list's top-left) for a list `width` wide.
