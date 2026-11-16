@@ -489,13 +489,21 @@ the footer's gear popover.
 3. **Session ramp.** Start a session with a tempo ramp. Expected: the
    drawing speeds up smoothly, with no jumps, and returns to the "one" pose
    on Stop.
-4. **Hidden gives the list the height.** Pick Hidden. Expected: the pulse
+4. **Play with Bluetooth output.** Connect Bluetooth headphones (the
+   iPhone, or the Mac) and press Play in each drawing. Expected: nothing
+   moves before the first click; then everything starts together from the
+   beat-1 pose, with no jump back.
+5. **A silent bar.** Start a session with a mute cycle (bars played, then
+   bars muted). Expected: during the muted bars the drawing keeps moving,
+   dimmed, with no effects; it lights up again when the sound comes back.
+6. **Hidden gives the list the height.** Pick Hidden. Expected: the pulse
    list uses the freed height, and the coincidence and engine lights appear
-   in the "ACTIVE PULSES" header.
-5. **The choice survives a restart.** Pick a drawing other than Circle, quit
+   in the "ACTIVE PULSES" header (on the iPhone, in both languages, as two
+   lights without labels when the labels do not fit).
+7. **The choice survives a restart.** Pick a drawing other than Circle, quit
    (on the iPhone, close it from the app switcher) and open the app again.
    Expected: the same drawing is selected.
-6. **Mini window (Mac).** Switch to the mini window. Expected: it shows the
+8. **Mini window (Mac).** Switch to the mini window. Expected: it shows the
    Circle whatever the choice, and the full window returns to the chosen
    drawing.
 

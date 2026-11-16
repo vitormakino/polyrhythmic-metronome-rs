@@ -591,12 +591,12 @@ impl UiState {
     }
 }
 
-/// `enabled` as `mask` overrides it at position `index`.
 /// Flash envelope of a hit `age` seconds old.
 fn flash_of(age: f32) -> f32 {
     (-age.max(0.0) / FLASH_TAU).exp().clamp(0.0, 1.0)
 }
 
+/// `enabled` as `mask` overrides it at position `index`.
 fn shown(enabled: bool, mask: Option<PulseMask>, index: usize) -> bool {
     let Some(mask) = mask else {
         return enabled;
