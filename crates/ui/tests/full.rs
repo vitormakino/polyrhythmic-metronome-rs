@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::Vec2;
+use egui::accesskit::Toggled;
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use egui_kittest::{Harness, SnapshotOptions, wgpu::WgpuTestRenderer};
 use pm_audio::BeatEvent;
@@ -11,6 +12,10 @@ use pm_ui::palette::{Palette, parse};
 use pm_ui::state::{PENDING_BEATS_CAP, UiAction, UiState};
 use pm_ui::theme::{self, Theme};
 use pm_ui::views::full::full_view;
+use pm_ui::views::topology::TopologyKind;
+
+mod common;
+use common::play_to;
 
 const MIN: Vec2 = pm_ui::views::full::MIN_SIZE;
 const PHONE: Vec2 = Vec2::new(375.0, 640.0);
@@ -694,5 +699,194 @@ fn full_medium_tokyo() {
         true,
         false,
         Some(Theme::from_palette(&palette)),
+    );
+}
+
+/// Default state at `kind`, three pulses.
+fn three_pulses(kind: TopologyKind) -> UiState {
+    let mut state = UiState::default();
+    state.pattern.add_pulse();
+    state.topology = kind;
+    state
+}
+
+/// From the header's middle to Play's top: the pulse list plus fixed gaps.
+fn list_reach(h: &Harness<'static, App>) -> f32 {
+    h.get_by_label("Play").rect().top() - h.get_by_label("Add pulse").rect().center().y
+}
+
+#[test]
+fn hidden_topology_gives_the_list_the_height() {
+    let h = harness(MIN, three_pulses(TopologyKind::Circle));
+    let circle = list_reach(&h);
+    let side = h.get_by_label("Rhythmic topology").rect().height();
+    assert!(side > 50.0, "the circle shows: {side}");
+
+    let h = harness(MIN, three_pulses(TopologyKind::Hidden));
+    assert!(h.query_by_label("Rhythmic topology").is_none());
+    let hidden = list_reach(&h);
+    assert!(
+        hidden >= circle + side,
+        "hidden {hidden} vs circle {circle} + side {side}"
+    );
+    // The header sits right under the tempo card.
+    let header = h.get_by_label("Add pulse").rect().center().y;
+    let bpm = h.get_by_label("BPM").rect().bottom();
+    assert!(header - bpm < 60.0, "header at {header}, BPM ends at {bpm}");
+}
+
+#[test]
+fn popover_lists_every_topology_and_switches() {
+    let mut h = harness(MEDIUM, pt_br(UiState::default()));
+    assert!(h.query_by_label("Arcos").is_none(), "closed at first");
+    click(&mut h, "Configurações");
+    for label in [
+        "Círculo",
+        "Cordas",
+        "Arcos",
+        "Relógio — órbitas",
+        "Relógio — varredura",
+        "Polígonos",
+        "Escondida",
+    ] {
+        let rect = h.get_by_label(label).rect();
+        assert!(rect.height() >= 44.0, "{label} row is {:?}", rect.size());
+    }
+    let toggled =
+        |h: &Harness<'static, App>, label: &str| h.get_by_label(label).accesskit_node().toggled();
+    assert_eq!(
+        toggled(&h, "Círculo"),
+        Some(Toggled::True),
+        "the current one"
+    );
+    assert_eq!(toggled(&h, "Arcos"), Some(Toggled::False));
+    h.state_mut().actions.clear();
+    click(&mut h, "Arcos");
+    assert_eq!(h.state().ui.topology, TopologyKind::Arcs);
+    assert!(
+        h.state().actions.is_empty(),
+        "the shell saves it on its own"
+    );
+    assert_eq!(toggled(&h, "Arcos"), Some(Toggled::True));
+    assert_eq!(toggled(&h, "Círculo"), Some(Toggled::False));
+}
+
+#[test]
+fn hidden_shows_indicators_in_header() {
+    let h = harness(PHONE, three_pulses(TopologyKind::Circle));
+    assert!(
+        h.query_by_label("COINCIDENCE").is_none(),
+        "in the card strip, not the header"
+    );
+    let h = harness(PHONE, three_pulses(TopologyKind::Hidden));
+    let light = h.get_by_label("COINCIDENCE").rect();
+    let add = h.get_by_label("Add pulse").rect();
+    assert!(
+        add.y_range().contains(light.center().y),
+        "{light:?} not in the header row {add:?}"
+    );
+    assert!(light.right() <= add.left(), "{light:?} left of {add:?}");
+}
+
+#[test]
+fn hidden_header_keeps_both_lights_on_the_phone() {
+    for state in [
+        three_pulses(TopologyKind::Hidden),
+        pt_br(three_pulses(TopologyKind::Hidden)),
+    ] {
+        let coincidence = state.messages.coincidence.clone();
+        let add_pulse = state.messages.add_pulse.clone();
+        let h = harness(PHONE, state);
+        let add = h.get_by_label(&add_pulse).rect();
+        let engine = h.get_by_label("ENGINE").rect();
+        let light = h.get_by_label(&coincidence).rect();
+        for node in [light, engine] {
+            assert!(
+                node.right() <= add.left(),
+                "{coincidence}: {node:?} runs into {add:?}"
+            );
+            assert!(add.y_range().contains(node.center().y), "{node:?}");
+        }
+        assert!(light.right() <= engine.left(), "{light:?} {engine:?}");
+    }
+}
+
+fn snapshot_topology(name: &str, size: Vec2, kind: TopologyKind) {
+    let Some(renderer) = renderer() else {
+        eprintln!("SKIPPED {name}: no wgpu adapter available");
+        return;
+    };
+    let mut state = pt_br(UiState::default());
+    state.theme = Arc::new(Theme::builtin("default").expect("theme exists"));
+    state.topology = kind;
+    let mut h = harness_with(size, state, Some(renderer));
+    h.remove_cursor();
+    h.run();
+    h.snapshot_options(
+        name,
+        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
+    );
+}
+
+#[test]
+fn full_375_hidden() {
+    snapshot_topology("full_375_hidden", PHONE, TopologyKind::Hidden);
+}
+
+#[test]
+fn full_medium_hidden() {
+    snapshot_topology("full_medium_hidden", MEDIUM, TopologyKind::Hidden);
+}
+
+/// Strings on the phone layout: three pulses, just after a hit.
+#[test]
+fn full_375_strings() {
+    let Some(renderer) = renderer() else {
+        eprintln!("SKIPPED full_375_strings: no wgpu adapter available");
+        return;
+    };
+    let mut state = pt_br(three_pulses(TopologyKind::Strings));
+    state.theme = Arc::new(Theme::builtin("default").expect("theme exists"));
+    // Just past pulse 2's beat 2.
+    play_to(&mut state, 1, 1, Duration::from_millis(30));
+    let mut h = harness_with(PHONE, state, Some(renderer));
+    h.remove_cursor();
+    h.run();
+    h.snapshot_options(
+        "full_375_strings",
+        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
+    );
+}
+
+/// Arcs on the phone layout: three pulses, just after a hit.
+#[test]
+fn full_375_arcs() {
+    let Some(renderer) = renderer() else {
+        eprintln!("SKIPPED full_375_arcs: no wgpu adapter available");
+        return;
+    };
+    let mut state = pt_br(three_pulses(TopologyKind::Arcs));
+    state.theme = Arc::new(Theme::builtin("default").expect("theme exists"));
+    // Just past pulse 2's beat 2.
+    play_to(&mut state, 1, 1, Duration::from_millis(30));
+    let mut h = harness_with(PHONE, state, Some(renderer));
+    h.remove_cursor();
+    h.run();
+    h.snapshot_options(
+        "full_375_arcs",
+        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
+    );
+}
+
+#[test]
+fn strings_card_is_low_and_the_list_gets_the_height() {
+    let circle = harness(PHONE, three_pulses(TopologyKind::Circle));
+    let square = circle.get_by_label("Rhythmic topology").rect();
+    let strings = harness(PHONE, three_pulses(TopologyKind::Strings));
+    let low = strings.get_by_label("Rhythmic topology").rect();
+    assert!(low.height() <= square.height(), "{low:?} vs {square:?}");
+    assert!(
+        list_reach(&strings) >= list_reach(&circle) + (square.height() - low.height()) - 1.0,
+        "the freed height goes to the list"
     );
 }

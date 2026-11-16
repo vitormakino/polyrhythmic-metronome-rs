@@ -8,8 +8,14 @@ use pm_audio::BeatEvent;
 use pm_core::{Pattern, PulseId};
 use pm_ui::i18n::Messages;
 use pm_ui::state::UiState;
-use pm_ui::theme;
-use pm_ui::views::topology::{ring_layout, topology};
+use pm_ui::theme::{self, Theme};
+mod common;
+use common::play_to;
+use pm_ui::views::topology::{
+    self as topo, TopologyKind, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius, arcs_too_fast,
+    cursor_x, displacement, orbits_angle, orbits_ball, orbits_is_ring, ring_layout, sweep_angle,
+    sweep_hand, topology,
+};
 
 fn pattern_of(beats: &[u32]) -> Pattern {
     let mut pattern = Pattern::default();
@@ -251,23 +257,773 @@ fn renderer() -> Option<WgpuTestRenderer> {
     result.ok()
 }
 
-fn snapshot(name: &str, mut state: UiState, size: f32, hits: &[(usize, u32, u64)]) {
+/// One event for pulse `index` at `at`.
+fn event(state: &UiState, index: usize, beat: u32, at: Instant, muted: bool) -> BeatEvent {
+    BeatEvent {
+        pulse: ids(state)[index],
+        beat,
+        frame: 0,
+        at,
+        muted,
+    }
+}
+
+#[test]
+fn phase_uses_visual_offset() {
+    let mut state = playing(&[4]);
+    state.visual_offset = Duration::from_millis(100);
+    let at = Instant::now();
+    // Play starts the clock at the shown time, `at`.
+    state.advance(at + Duration::from_millis(100), 0.0);
+    state.on_beat(&event(&state, 0, 0, at, false));
+    state.advance(at + Duration::from_millis(100), 0.0);
+    let phase = state.measure_phase().expect("playing");
+    assert!(phase.abs() < 1e-6, "{phase}");
+    assert_eq!(state.pulse_phase(0).map(|p| p.floor()), Some(0.0));
+}
+
+#[test]
+fn muted_events_still_anchor() {
+    let mut state = playing(&[4]);
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    // 120 BPM, 4 beats: a 2 s measure. Provisionally the clock reads 0.5
+    // at +1 s; the muted beat 0 sounding there is far off and snaps it.
+    let beat_at = at + Duration::from_secs(1);
+    state.on_beat(&event(&state, 0, 0, beat_at, true));
+    state.advance(beat_at, 0.0);
+    let phase = state.measure_phase().expect("playing");
+    assert!(phase.abs() < 1e-6, "{phase}");
+    assert_eq!(state.active_beat(ids(&state)[0]), None);
+    assert_eq!(state.pending_beats(), 0);
+}
+
+#[test]
+fn hit_age_counts_from_shown_time() {
+    let mut state = playing(&[4]);
+    state.visual_offset = Duration::from_millis(50);
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    state.on_beat(&event(&state, 0, 1, at, false));
+    state.advance(at + Duration::from_millis(80), 0.0);
+    let hit = state.hit(ids(&state)[0]).expect("lit");
+    assert_eq!(hit.beat, 1);
+    assert!((hit.age - 0.03).abs() < 1e-3, "{}", hit.age);
+}
+
+#[test]
+fn seed_is_stable() {
+    let id = ids(&playing(&[4]))[0];
+    assert_eq!(UiState::seed(id, 9), UiState::seed(id, 9));
+    assert_ne!(UiState::seed(id, 9), UiState::seed(id, 10));
+}
+
+#[test]
+fn clear_beats_resets_clock() {
+    let mut state = playing(&[4]);
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    // Anchor beat 0 at +1 s (2 s measure), then hide and show again.
+    let first = at + Duration::from_secs(1);
+    state.on_beat(&event(&state, 0, 0, first, true));
+    state.advance(first + Duration::from_millis(100), 0.0);
+    state.clear_beats();
+    // Beat 1 is phase 0.25; without the reset the clock would only slew
+    // towards it, with it the first anchor snaps.
+    let next = first + Duration::from_millis(300);
+    state.on_beat(&event(&state, 0, 1, next, true));
+    state.advance(next, 0.0);
+    let phase = state.measure_phase().expect("playing");
+    assert!((phase - 0.25).abs() < 1e-6, "{phase}");
+}
+
+#[test]
+fn kind_round_trips_snake_case() {
+    #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+    struct Doc {
+        topology: TopologyKind,
+    }
+    let names = [
+        "circle", "strings", "arcs", "orbits", "sweep", "polygons", "hidden",
+    ];
+    for (kind, name) in TopologyKind::ALL.into_iter().zip(names) {
+        let text = toml::to_string(&Doc { topology: kind }).unwrap();
+        assert_eq!(text.trim(), format!("topology = \"{name}\""));
+        assert_eq!(
+            toml::from_str::<Doc>(&text).unwrap(),
+            Doc { topology: kind }
+        );
+    }
+    assert_eq!(TopologyKind::default(), TopologyKind::Circle);
+    assert_eq!(UiState::default().topology, TopologyKind::Circle);
+}
+
+#[test]
+fn all_lists_seven_in_order() {
+    use TopologyKind::*;
+    assert_eq!(
+        TopologyKind::ALL,
+        [Circle, Strings, Arcs, Orbits, Sweep, Polygons, Hidden]
+    );
+}
+
+#[test]
+fn shapes_per_kind() {
+    use topo::Shape;
+    let state = UiState::default();
+    for kind in [
+        TopologyKind::Circle,
+        TopologyKind::Orbits,
+        TopologyKind::Sweep,
+        TopologyKind::Polygons,
+    ] {
+        assert_eq!(topo::shape(kind, &state), Shape::Square);
+    }
+    assert_eq!(topo::shape(TopologyKind::Arcs, &state), Shape::Aspect(2.0));
+    assert_eq!(topo::shape(TopologyKind::Hidden, &state), Shape::Hidden);
+}
+
+#[test]
+fn disabled_pulse_moves_without_hit() {
+    let mut state = playing(&[4, 3]);
+    let second = ids(&state)[1];
+    state.pattern.set_enabled(second, false);
+    hit(&mut state, &[(0, 1, 100), (1, 1, 100)]);
+    let frame = topo::frame(&state);
+    assert!(frame.playing);
+    assert_eq!(frame.pulses.len(), 2);
+    assert!(frame.pulses[0].hit.is_some());
+    assert!(frame.pulses[0].enabled);
+    let off = &frame.pulses[1];
+    assert!(!off.enabled);
+    assert!(off.phase.is_some(), "a disabled pulse keeps moving");
+    assert_eq!(off.hit, None, "a disabled pulse fires no effects");
+    assert_eq!(frame.pulses[0].seed, UiState::seed(ids(&state)[0], 100));
+}
+
+/// One pass of `paint` over `state` in a `size` square; the shapes it made.
+fn paint_once(ctx: &egui::Context, state: &UiState, kind: TopologyKind, size: f32) -> usize {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            Vec2::splat(size + 16.0),
+        )),
+        ..Default::default()
+    };
+    let output = ctx.run_ui(input, |ui| {
+        let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::splat(size));
+        topo::paint(kind, ui, state, rect);
+    });
+    let count = output.shapes.len();
+    output.drop_without_applying_deltas();
+    count
+}
+
+/// Hits every pulse at `at` on a non-zero beat and shows them `age` later.
+fn hit_all_at(state: &mut UiState, beat: u32, at: Instant, age: Duration) {
+    state.advance(at, 0.0);
+    for (i, id) in ids(state).into_iter().enumerate() {
+        state.on_beat(&BeatEvent {
+            pulse: id,
+            beat,
+            frame: 1000 + i as u64,
+            at,
+            muted: false,
+        });
+    }
+    state.advance(at + age, 0.0);
+}
+
+#[test]
+fn paint_survives_pattern_edits_mid_flash() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[4, 3, 5]);
+    hit_all_at(&mut state, 2, Instant::now(), Duration::from_millis(30));
+    paint_once(&ctx, &state, TopologyKind::Circle, 300.0);
+    let first = ids(&state)[0];
+    state.pattern.remove(first);
+    paint_once(&ctx, &state, TopologyKind::Circle, 300.0);
+    // The new reference pulse has fewer beats than the lit one.
+    let next = ids(&state)[0];
+    state.pattern.set_beats(next, 1);
+    paint_once(&ctx, &state, TopologyKind::Circle, 300.0);
+    state.advance(state.now() + Duration::from_millis(16), 0.016);
+    paint_once(&ctx, &state, TopologyKind::Circle, 300.0);
+}
+
+#[test]
+fn circle_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Circle, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+#[test]
+fn hidden_paints_nothing() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let state = playing(&[4, 3]);
+    assert_eq!(paint_once(&ctx, &state, TopologyKind::Hidden, 300.0), 0);
+}
+
+#[test]
+fn first_hit_after_play_has_no_prev() {
+    let mut state = playing(&[4, 3]);
+    hit(&mut state, &[(0, 0, 100)]);
+    let frame = topo::frame(&state);
+    assert_eq!(frame.pulses[0].prev, None, "nothing lit before Play");
+    assert_eq!(frame.pulses[1].prev, None, "no hit, no prev");
+    // A muted stretch skips beats: prev is the beat really lit, not beat - 1.
+    hit(&mut state, &[(0, 1, 200)]);
+    hit(&mut state, &[(0, 3, 400)]);
+    assert_eq!(topo::frame(&state).pulses[0].prev, Some(1));
+    // A prev the pulse no longer has is dropped.
+    let id = ids(&state)[0];
+    hit(&mut state, &[(0, 0, 500)]);
+    state.pattern.set_beats(id, 2);
+    assert_eq!(topo::frame(&state).pulses[0].prev, None);
+}
+
+#[test]
+fn strings_cursor_at_phase() {
+    let track = egui::Rect::from_min_max(egui::pos2(10.0, 0.0), egui::pos2(110.0, 50.0));
+    assert_eq!(cursor_x(track, 0.0), 10.0);
+    assert!((cursor_x(track, 0.25) - 35.0).abs() < 1e-4);
+    assert!((cursor_x(track, 1.0) - 110.0).abs() < 1e-4);
+}
+
+#[test]
+fn strings_pluck_is_zero_at_ends() {
+    for pluck in [0.0, 0.25, 0.5, 1.0] {
+        for age in [0.0, 0.01, 0.05, 0.3] {
+            assert_eq!(displacement(0.0, pluck, age), 0.0, "{pluck} {age}");
+            assert_eq!(displacement(1.0, pluck, age), 0.0, "{pluck} {age}");
+        }
+    }
+    // It does move in the middle, and dies away.
+    assert!(displacement(0.5, 0.5, 0.03).abs() > 1.0);
+    assert!(displacement(0.5, 0.5, 5.0).abs() < 1e-3);
+}
+
+#[test]
+fn strings_at_rest_when_stopped() {
+    let mut state = playing(&[4, 3, 5]);
+    hit(&mut state, &[(0, 2, 10), (1, 1, 10)]);
+    state.playing = false;
+    let frame = topo::frame(&state);
+    assert!(!frame.playing);
+    for pulse in &frame.pulses {
+        assert_eq!(pulse.hit, None);
+        let age = pulse.hit.map_or(f32::INFINITY, |h| h.age);
+        for k in 0..=10 {
+            assert_eq!(displacement(k as f32 / 10.0, 0.5, age), 0.0);
+        }
+    }
+}
+
+#[test]
+fn strings_shape_per_pulse_count() {
+    use topo::Shape;
+    let height = |n: usize| match topo::shape(TopologyKind::Strings, &playing(&vec![4; n])) {
+        Shape::Low(h) => h,
+        other => panic!("{other:?}"),
+    };
+    // The card is the drawing (28 + 22 per pulse, at most 200) plus its chrome.
+    let chrome = height(3) - 94.0;
+    assert!(chrome > 50.0, "{chrome}");
+    assert!((height(1) - 50.0 - chrome).abs() < 12.0);
+    assert!(height(16) > 200.0 + chrome - 12.0);
+    assert!(height(16) < 200.0 + chrome + 12.0);
+    assert!(height(8) <= height(16) + 12.0);
+}
+
+#[test]
+fn strings_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Strings, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+#[test]
+fn strings_old_hit_keeps_its_mark() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    // A hit 3 s old has stopped ringing: its beat shows the idle mark again,
+    // like every other beat, so the shapes match a pulse never hit.
+    let mut old = playing(&[4, 3]);
+    hit_all_at(&mut old, 1, Instant::now(), Duration::from_secs(3));
+    assert!(topo::frame(&old).pulses.iter().all(|p| p.hit.is_some()));
+    let mut fresh = playing(&[4, 3]);
+    fresh.advance(Instant::now(), 0.0);
+    assert_eq!(
+        paint_once(&ctx, &old, TopologyKind::Strings, 360.0),
+        paint_once(&ctx, &fresh, TopologyKind::Strings, 360.0)
+    );
+}
+
+#[test]
+fn arcs_ball_on_baseline_at_each_beat() {
+    let center = egui::pos2(100.0, 80.0);
+    for k in 0..8 {
+        let at = arcs_ball(center, 50.0, f64::from(k));
+        assert!((at.y - center.y).abs() < 1e-3, "{k}: {at:?}");
+    }
+    // Halfway through a beat it is at the top of the arc.
+    let top = arcs_ball(center, 50.0, 2.5);
+    assert!((top.y - (center.y - 50.0)).abs() < 1e-3, "{top:?}");
+    assert!((top.x - center.x).abs() < 1e-3, "{top:?}");
+}
+
+#[test]
+fn arcs_all_left_at_beat_one() {
+    let center = egui::pos2(100.0, 80.0);
+    for r in [20.0, 50.0, 90.0] {
+        let at = arcs_ball(center, r, 0.0);
+        assert!((at.x - (center.x - r)).abs() < 1e-3, "{r}: {at:?}");
+    }
+}
+
+#[test]
+fn arcs_alternate_direction() {
+    let center = egui::pos2(0.0, 0.0);
+    // Even beat: left to right. Odd beat: right to left.
+    assert!(arcs_ball(center, 10.0, 0.1).x < -5.0);
+    assert!(arcs_ball(center, 10.0, 0.9).x > 5.0);
+    assert!(arcs_ball(center, 10.0, 1.1).x > 5.0);
+    assert!(arcs_ball(center, 10.0, 1.9).x < -5.0);
+    assert!(arcs_ball(center, 10.0, 2.1).x < -5.0);
+    // And at constant speed: equal phase steps move it equal angles.
+    let a = arcs_ball(center, 10.0, 0.25);
+    let b = arcs_ball(center, 10.0, 0.5);
+    assert!((a.to_vec2().angle() - b.to_vec2().angle()).abs() > 0.5);
+}
+
+#[test]
+fn arcs_radii_span_30_to_95_percent() {
+    assert!((arcs_radius(0, 3, 100.0) - 95.0).abs() < 1e-4);
+    assert!((arcs_radius(2, 3, 100.0) - 30.0).abs() < 1e-4);
+    assert!(arcs_radius(0, 1, 100.0) > 90.0);
+    assert!(arcs_radius(0, 16, 100.0) > arcs_radius(1, 16, 100.0));
+}
+
+#[test]
+fn arcs_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Arcs, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+#[test]
+fn arcs_odd_pulse_has_no_jump_at_wrap() {
+    let center = egui::pos2(0.0, 0.0);
+    let r = 100.0;
+    // 3 beats: the last beat of measure 0 is beat 2 (absolute), the first of measure 1 is absolute 3.
+    let before = arcs_ball_at(center, r, 2.999, 0);
+    let after = arcs_ball_at(center, r, 0.001, 3);
+    assert!((before - after).length() < 2.0, "{before:?} {after:?}");
+    // Two measures on, parity is back and still continuous.
+    let before = arcs_ball_at(center, r, 2.999, 3);
+    let after = arcs_ball_at(center, r, 0.001, 6);
+    assert!((before - after).length() < 2.0, "{before:?} {after:?}");
+}
+
+#[test]
+fn arcs_all_on_baseline_at_beat_one() {
+    let center = egui::pos2(10.0, 40.0);
+    for beats in [1u64, 2, 3, 4, 5, 7] {
+        for measure in 0..4 {
+            let at = arcs_ball_at(center, 30.0, 0.0, measure * beats);
+            assert!((at.y - center.y).abs() < 1e-3, "{beats} {measure}: {at:?}");
+        }
+    }
+}
+
+#[test]
+fn arcs_fast_pulse_drops_its_ball() {
+    // 8 beats against a reference of 1 at 300 BPM: a crossing lasts 0.2 / 8 = 25 ms.
+    let mut state = playing(&[1, 8]);
+    state.bpm = pm_core::Bpm::new(300);
+    hit(&mut state, &[(0, 0, 100)]);
+    let frame = topo::frame(&state);
+    assert!(arcs_too_fast(frame.measure_secs, 8));
+    assert!(!arcs_too_fast(frame.measure_secs, 1));
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let fast = paint_once(&ctx, &state, TopologyKind::Arcs, 360.0);
+    // The same pattern slowly: the 8-beat pulse gets its ball and trail back.
+    state.bpm = pm_core::Bpm::new(40);
+    hit(&mut state, &[(0, 0, 100)]);
+    assert!(!arcs_too_fast(topo::frame(&state).measure_secs, 8));
+    let slow = paint_once(&ctx, &state, TopologyKind::Arcs, 360.0);
+    assert!(fast < slow, "{fast} vs {slow}");
+}
+
+#[test]
+fn measure_count_increments_on_wrap() {
+    let mut state = playing(&[3]);
+    assert_eq!(state.measure_count(), 0);
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    hit(&mut state, &[(0, 0, 1)]);
+    let measure = Duration::from_secs_f64(3.0 * 60.0 / f64::from(state.shown_bpm().get()));
+    let mut seen = state.measure_count();
+    // 10 ms steps over 2.5 measures.
+    for step in 1..=(measure.as_millis() as u32 * 25 / 100) {
+        state.advance(at + Duration::from_millis(u64::from(step) * 10), 0.01);
+        assert!(state.measure_count() >= seen);
+        seen = state.measure_count();
+    }
+    assert_eq!(seen, 2, "after 2.5 measures");
+    state.clear_beats();
+    assert_eq!(state.measure_count(), 0);
+}
+
+#[test]
+fn measure_count_survives_a_hitch() {
+    let mut state = playing(&[3]);
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    state.on_beat(&event(&state, 0, 0, at, true));
+    // 120 BPM, 3 beats: a 1.5 s measure. One frame at 0.9 of the measure,
+    // the next one stalled until 1.6: the bar line went by unseen.
+    state.advance(at + Duration::from_millis(1350), 0.0);
+    assert_eq!(state.measure_count(), 0);
+    state.advance(at + Duration::from_millis(2400), 1.05);
+    assert_eq!(state.measure_count(), 1);
+    let phase = state.measure_phase().unwrap();
+    assert!((phase - 0.6).abs() < 1e-6, "{phase}");
+}
+
+#[test]
+fn play_holds_the_beat_one_pose_until_the_first_click() {
+    let mut state = playing(&[4, 3]);
+    let play = Instant::now();
+    state.advance(play, 0.0);
+    // The first click is 250 ms away (output latency); its event is known now.
+    let first = play + Duration::from_millis(250);
+    state.on_beat(&event(&state, 0, 0, first, false));
+    for ms in [16, 100, 200, 250] {
+        state.advance(play + Duration::from_millis(ms), 0.016);
+        assert_eq!(state.measure_phase(), Some(0.0), "moved at +{ms} ms");
+    }
+    // Then it moves forward from beat 1 (2 s measure), with no step back.
+    state.advance(first + Duration::from_millis(100), 0.016);
+    let phase = state.measure_phase().unwrap();
+    assert!((phase - 0.05).abs() < 1e-6, "{phase}");
+}
+
+#[test]
+fn arcs_ripple_is_where_the_ball_touched() {
+    let center = egui::pos2(50.0, 40.0);
+    let r = 30.0;
+    // 3 beats, measure 1, beat 0 (absolute 3, odd): the ball touches on the right.
+    let at = arcs_contact(center, r, 0, 3, 1, Some(0.05));
+    let ball = arcs_ball_at(center, r, 0.0, 3);
+    assert!((at.x - ball.x).abs() < 1e-3 && at.x > center.x, "{at:?}");
+    // Measure 0, beat 0: on the left.
+    assert!(arcs_contact(center, r, 0, 3, 0, Some(0.05)).x < center.x);
+    // Hit on beat 2 of measure 1, shown just after the wrap (phase 0.02 of
+    // measure 2): that beat was absolute 5, odd: the right side.
+    let at = arcs_contact(center, r, 2, 3, 2, Some(0.02));
+    assert!(at.x > center.x, "{at:?}");
+}
+
+#[test]
+fn orbits_at_gate_on_each_beat() {
+    let center = egui::pos2(100.0, 80.0);
+    for k in 0..8 {
+        let at = orbits_ball(center, 50.0, f64::from(k));
+        assert!(
+            (at.x - 100.0).abs() < 1e-3 && (at.y - 30.0).abs() < 1e-3,
+            "{at:?}"
+        );
+    }
+    // A quarter turn later it is at 3 o'clock; half a turn, at 6.
+    let quarter = orbits_ball(center, 50.0, 2.25);
+    assert!((quarter.x - 150.0).abs() < 1e-3 && (quarter.y - 80.0).abs() < 1e-3);
+    let half = orbits_ball(center, 50.0, 2.5);
+    assert!((half.y - 130.0).abs() < 1e-3);
+    // Constant speed: equal phase steps are equal angle steps.
+    let step = orbits_angle(0.3) - orbits_angle(0.2);
+    assert!((orbits_angle(1.8) - orbits_angle(1.7) - step).abs() < 1e-4);
+}
+
+#[test]
+fn orbits_aligned_at_beat_one() {
+    let center = egui::pos2(100.0, 80.0);
+    for r in [30.0, 55.0, 95.0] {
+        let at = orbits_ball(center, r, 0.0);
+        assert!((at.x - center.x).abs() < 1e-3 && at.y < center.y, "{at:?}");
+    }
+}
+
+#[test]
+fn orbits_fast_pulse_becomes_ring() {
+    // 8 beats against a reference of 1 at 300 BPM: a turn lasts 0.2 / 8 = 25 ms.
+    let mut state = playing(&[1, 8]);
+    state.bpm = pm_core::Bpm::new(300);
+    hit(&mut state, &[(0, 0, 100)]);
+    let frame = topo::frame(&state);
+    assert!((frame.measure_secs - 0.2).abs() < 1e-9);
+    assert!(orbits_is_ring(frame.measure_secs, 8));
+    assert!(!orbits_is_ring(frame.measure_secs, 1));
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let fast = paint_once(&ctx, &state, TopologyKind::Orbits, 360.0);
+    // The same pattern slowly: the 8-beat pulse gets its ball and trail back.
+    state.bpm = pm_core::Bpm::new(40);
+    hit(&mut state, &[(0, 0, 100)]);
+    assert!(!orbits_is_ring(topo::frame(&state).measure_secs, 8));
+    let slow = paint_once(&ctx, &state, TopologyKind::Orbits, 360.0);
+    assert!(fast < slow, "{fast} vs {slow}");
+}
+
+#[test]
+fn orbits_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    state.bpm = pm_core::Bpm::new(40);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Orbits, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+    // Also with a slow reference and fast others, and the other way round.
+    let mut state = playing(&[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 1024]);
+    state.bpm = pm_core::Bpm::new(40);
+    hit_all_at(&mut state, 2, Instant::now(), Duration::from_millis(40));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Orbits, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+#[test]
+fn sweep_hand_at_measure_phase() {
+    let center = egui::pos2(100.0, 80.0);
+    // A quarter of the measure: 3 o'clock; half: 6; three quarters: 9.
+    let q = sweep_hand(center, 50.0, 0.25);
+    assert!(
+        (q.x - 150.0).abs() < 1e-3 && (q.y - 80.0).abs() < 1e-3,
+        "{q:?}"
+    );
+    let h = sweep_hand(center, 50.0, 0.5);
+    assert!(
+        (h.x - 100.0).abs() < 1e-3 && (h.y - 130.0).abs() < 1e-3,
+        "{h:?}"
+    );
+    let w = sweep_hand(center, 50.0, 0.75);
+    assert!(
+        (w.x - 50.0).abs() < 1e-3 && (w.y - 80.0).abs() < 1e-3,
+        "{w:?}"
+    );
+    // Constant speed: equal phase steps are equal angle steps.
+    let step = sweep_angle(0.3) - sweep_angle(0.2);
+    assert!((sweep_angle(0.9) - sweep_angle(0.8) - step).abs() < 1e-4);
+}
+
+#[test]
+fn sweep_hand_up_at_beat_one() {
+    let center = egui::pos2(100.0, 80.0);
+    for len in [30.0, 95.0] {
+        let at = sweep_hand(center, len, 0.0);
+        assert!((at.x - center.x).abs() < 1e-3 && (at.y - (80.0 - len)).abs() < 1e-3);
+    }
+    // A whole measure later it is up again.
+    let again = sweep_hand(center, 50.0, 1.0);
+    assert!((again.x - 100.0).abs() < 1e-3 && again.y < 80.0);
+}
+
+#[test]
+fn sweep_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    state.bpm = pm_core::Bpm::new(40);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Sweep, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+    // Dense but under the mark cut-off, with a fast measure.
+    let mut state = playing(&[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 64, 1024]);
+    state.bpm = pm_core::Bpm::new(300);
+    hit_all_at(&mut state, 2, Instant::now(), Duration::from_millis(40));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Sweep, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+#[test]
+fn sweep_stopped_pose_has_no_trail_or_lit_marks() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[4, 3]);
+    hit(&mut state, &[(0, 1, 10), (1, 2, 10)]);
+    let moving = paint_once(&ctx, &state, TopologyKind::Sweep, 360.0);
+    state.playing = false;
+    state.advance(state.now() + Duration::from_millis(16), 0.016);
+    let frame = topo::frame(&state);
+    assert_eq!(frame.measure_phase, None);
+    assert!(frame.pulses.iter().all(|p| p.hit.is_none()));
+    assert_eq!(frame.coincidence_age, None);
+    let stopped = paint_once(&ctx, &state, TopologyKind::Sweep, 360.0);
+    assert!(stopped < moving, "{stopped} vs {moving}");
+    // The same pattern never played: the stopped pose is just rings, marks, hand and dot.
+    let mut fresh = playing(&[4, 3]);
+    fresh.playing = false;
+    fresh.advance(fresh.now() + Duration::from_millis(16), 0.016);
+    assert_eq!(
+        stopped,
+        paint_once(&ctx, &fresh, TopologyKind::Sweep, 360.0)
+    );
+}
+
+#[test]
+fn polygon_runner_on_vertex_at_each_beat() {
+    let center = egui::pos2(100.0, 100.0);
+    for beats in [3u32, 4, 7, 24, 40] {
+        for k in 0..beats * 2 {
+            let at = topo::polygons_runner(center, 50.0, beats, f64::from(k));
+            let vertex = topo::polygons_vertex(center, 50.0, beats, k % beats);
+            assert!((at - vertex).length() < 1e-3, "{beats} beats, beat {k}");
+        }
+        // Beat 1 is the top vertex.
+        let top = topo::polygons_vertex(center, 50.0, beats, 0);
+        assert!((top.x - 100.0).abs() < 1e-3 && (top.y - 50.0).abs() < 1e-3);
+        // Constant speed: the same step along an edge covers the same distance.
+        let a = topo::polygons_runner(center, 50.0, beats, 0.2);
+        let b = topo::polygons_runner(center, 50.0, beats, 0.4);
+        let c = topo::polygons_runner(center, 50.0, beats, 1.2);
+        let d = topo::polygons_runner(center, 50.0, beats, 1.4);
+        assert!(((b - a).length() - (d - c).length()).abs() < 1e-3);
+    }
+}
+
+#[test]
+fn polygon_one_and_two_beats_degenerate() {
+    let center = egui::pos2(100.0, 100.0);
+    // One beat: a single point, at the top.
+    for phase in [0.0, 0.3, 0.9, 4.5] {
+        let at = topo::polygons_runner(center, 50.0, 1, phase);
+        assert!((at - egui::pos2(100.0, 50.0)).length() < 1e-3, "{phase}");
+    }
+    // Two beats: a line through the top and the bottom, there and back.
+    let bottom = egui::pos2(100.0, 150.0);
+    assert!((topo::polygons_vertex(center, 50.0, 2, 1) - bottom).length() < 1e-3);
+    let mid = topo::polygons_runner(center, 50.0, 2, 0.5);
+    assert!((mid - center).length() < 1e-3);
+    let back = topo::polygons_runner(center, 50.0, 2, 1.5);
+    assert!((back - center).length() < 1e-3);
+    assert!((topo::polygons_runner(center, 50.0, 2, 1.0) - bottom).length() < 1e-3);
+    assert!(
+        (topo::polygons_runner(center, 50.0, 2, 2.0) - egui::pos2(100.0, 50.0)).length() < 1e-3
+    );
+}
+
+#[test]
+fn polygons_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    state.bpm = pm_core::Bpm::new(40);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Polygons, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+    // Wobbling edges up to the cut-off, a fast measure, and a huge reference.
+    let mut state = playing(&[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 24, 1024]);
+    state.bpm = pm_core::Bpm::new(300);
+    hit_all_at(&mut state, 2, Instant::now(), Duration::from_millis(40));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Polygons, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+#[test]
+fn polygons_stopped_pose_has_no_effects() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[4, 3]);
+    hit(&mut state, &[(0, 1, 10), (1, 2, 10)]);
+    let moving = paint_once(&ctx, &state, TopologyKind::Polygons, 360.0);
+    state.playing = false;
+    state.advance(state.now() + Duration::from_millis(16), 0.016);
+    let frame = topo::frame(&state);
+    assert!(
+        frame
+            .pulses
+            .iter()
+            .all(|p| p.hit.is_none() && p.phase.is_none())
+    );
+    assert_eq!(frame.coincidence_age, None);
+    let stopped = paint_once(&ctx, &state, TopologyKind::Polygons, 360.0);
+    assert!(stopped < moving, "{stopped} vs {moving}");
+    // The same pattern never played: just polygons, vertices and runners on vertex 0.
+    let mut fresh = playing(&[4, 3]);
+    fresh.playing = false;
+    fresh.advance(fresh.now() + Duration::from_millis(16), 0.016);
+    assert_eq!(
+        stopped,
+        paint_once(&ctx, &fresh, TopologyKind::Polygons, 360.0)
+    );
+}
+
+#[test]
+fn polygons_disabled_pulse_has_no_effects() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[4, 3]);
+    for id in ids(&state) {
+        state.pattern.set_enabled(id, false);
+    }
+    hit(&mut state, &[(0, 1, 10), (1, 2, 10)]);
+    let frame = topo::frame(&state);
+    assert!(
+        frame
+            .pulses
+            .iter()
+            .all(|p| p.hit.is_none() && p.phase.is_some())
+    );
+    // The same hits on enabled pulses add wobble points and sparks.
+    let mut enabled = playing(&[4, 3]);
+    hit(&mut enabled, &[(0, 1, 10), (1, 2, 10)]);
+    let lit = paint_once(&ctx, &enabled, TopologyKind::Polygons, 360.0);
+    let dim = paint_once(&ctx, &state, TopologyKind::Polygons, 360.0);
+    assert!(dim < lit, "{dim} vs {lit}");
+}
+
+/// Paints `kind` for `state` in a card-sized area: a 360 pt square, 360 x 180
+/// for Arcs, 360 pt wide and as low as Strings ask.
+fn snapshot(name: &str, mut state: UiState, kind: TopologyKind) {
     let Some(renderer) = renderer() else {
         eprintln!("SKIPPED {name}: no wgpu adapter available");
         return;
     };
-    hit(&mut state, hits);
-    settle(&mut state);
-    // Keep the hits lit but let the flash settle, like a steady frame.
+    state.topology = kind;
+    let size = match topo::shape(kind, &state) {
+        topo::Shape::Aspect(ratio) => Vec2::new(360.0, 360.0 / ratio),
+        topo::Shape::Low(height) => Vec2::new(360.0, height),
+        topo::Shape::Square | topo::Shape::Hidden => Vec2::splat(360.0),
+    };
     let mut h = Harness::builder()
-        .with_size(Vec2::splat(size + 16.0))
+        .with_size(size + Vec2::splat(16.0))
         .with_context_setup(theme::install)
         .renderer(renderer)
         .build_ui_state(
             move |ui, state: &mut UiState| {
-                ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, theme::DARK.card);
-                topology(ui, state, size);
+                let card = state.theme.card;
+                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
+                let rect = egui::Rect::from_min_size(ui.max_rect().min, size);
+                topo::paint(kind, ui, state, rect);
             },
             state,
         );
@@ -278,55 +1034,140 @@ fn snapshot(name: &str, mut state: UiState, size: f32, hits: &[(usize, u32, u64)
     );
 }
 
+/// `beats` at 120 BPM, played until `after` past beat `beat` of pulse `pulse`
+/// (counted from Play), in `theme` and pt-BR.
+fn played(beats: &[u32], theme: &str, pulse: usize, beat: u32, after: Duration) -> UiState {
+    let mut state = pt_br(playing(beats));
+    state.theme = Arc::new(Theme::builtin(theme).unwrap());
+    play_to(&mut state, pulse, beat, after);
+    state
+}
+
+/// Two measures in, just after beat 1 of every pulse: a coincidence.
+fn coincidence(beats: &[u32], theme: &str) -> UiState {
+    played(beats, theme, 0, 2 * beats[0], Duration::from_millis(50))
+}
+
 #[test]
 fn topology_2() {
-    snapshot(
-        "topology_2",
-        pt_br(playing(&[4, 3])),
-        360.0,
-        &[(0, 0, 100), (1, 0, 100)],
-    );
+    // A coincidence that has settled: still lit, its flash gone.
+    let state = played(&[4, 3], "default", 0, 8, Duration::from_millis(400));
+    assert!(state.coincidence());
+    snapshot("topology_2", state, TopologyKind::Circle);
 }
 
 #[test]
 fn topology_2_en() {
-    snapshot(
-        "topology_2_en",
-        playing(&[4, 3]),
-        360.0,
-        &[(0, 0, 100), (1, 0, 100)],
-    );
+    let mut state = playing(&[4, 3]);
+    play_to(&mut state, 0, 8, Duration::from_millis(400));
+    snapshot("topology_2_en", state, TopologyKind::Circle);
 }
 
 #[test]
 fn topology_6() {
-    snapshot(
-        "topology_6",
-        pt_br(playing(&[4, 3, 5, 7, 6, 8])),
-        360.0,
-        &[
-            (0, 1, 100),
-            (1, 2, 100),
-            (2, 3, 100),
-            (3, 5, 100),
-            (4, 0, 100),
-            (5, 7, 100),
-        ],
+    let state = played(
+        &[4, 3, 5, 7, 6, 8],
+        "default",
+        5,
+        7,
+        Duration::from_millis(30),
     );
+    snapshot("topology_6", state, TopologyKind::Circle);
 }
 
 #[test]
 fn topology_many() {
+    let beats = [17, 23, 4, 5, 6, 32, 64, 12, 9, 3, 2, 1];
+    let state = played(&beats, "default", 2, 1, Duration::from_millis(40));
+    snapshot("topology_many", state, TopologyKind::Circle);
+}
+
+#[test]
+fn topology_circle_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 0, 1, Duration::from_millis(50));
+    snapshot("topology_circle_hit_dark", state, TopologyKind::Circle);
+}
+
+#[test]
+fn topology_circle_coincidence_light() {
+    let state = coincidence(&[3, 4, 5], "light");
+    assert!(state.coincidence());
     snapshot(
-        "topology_many",
-        pt_br(playing(&[17, 23, 4, 5, 6, 32, 64, 12, 9, 3, 2, 1])),
-        360.0,
-        &[
-            (0, 5, 100),
-            (1, 0, 100),
-            (2, 1, 100),
-            (5, 31, 100),
-            (6, 40, 100),
-        ],
+        "topology_circle_coincidence_light",
+        state,
+        TopologyKind::Circle,
+    );
+}
+
+#[test]
+fn topology_strings_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 1, 2, Duration::from_millis(30));
+    snapshot("topology_strings_hit_dark", state, TopologyKind::Strings);
+}
+
+#[test]
+fn topology_strings_many_light() {
+    let beats = [17, 23, 4, 5, 6, 32, 64, 12];
+    let state = played(&beats, "light", 0, 5, Duration::from_millis(30));
+    snapshot("topology_strings_many_light", state, TopologyKind::Strings);
+}
+
+#[test]
+fn topology_arcs_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 0, 1, Duration::from_millis(40));
+    snapshot("topology_arcs_hit_dark", state, TopologyKind::Arcs);
+}
+
+#[test]
+fn topology_arcs_coincidence_light() {
+    let state = coincidence(&[3, 4, 5], "light");
+    assert!(state.coincidence());
+    snapshot("topology_arcs_coincidence_light", state, TopologyKind::Arcs);
+}
+
+#[test]
+fn topology_orbits_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 1, 2, Duration::from_millis(40));
+    snapshot("topology_orbits_hit_dark", state, TopologyKind::Orbits);
+}
+
+#[test]
+fn topology_orbits_many_light() {
+    let beats = [3, 4, 5, 7, 8, 9, 11, 13];
+    let state = played(&beats, "light", 2, 3, Duration::from_millis(30));
+    snapshot("topology_orbits_many_light", state, TopologyKind::Orbits);
+}
+
+#[test]
+fn topology_sweep_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 2, 3, Duration::from_millis(40));
+    snapshot("topology_sweep_hit_dark", state, TopologyKind::Sweep);
+}
+
+#[test]
+fn topology_sweep_coincidence_light() {
+    let state = coincidence(&[3, 4, 5], "light");
+    assert!(state.coincidence());
+    snapshot(
+        "topology_sweep_coincidence_light",
+        state,
+        TopologyKind::Sweep,
+    );
+}
+
+#[test]
+fn topology_polygons_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 0, 2, Duration::from_millis(40));
+    snapshot("topology_polygons_hit_dark", state, TopologyKind::Polygons);
+}
+
+#[test]
+fn topology_polygons_many_light() {
+    let beats = [3, 4, 5, 7, 8, 9, 11, 30];
+    let state = played(&beats, "light", 5, 4, Duration::from_millis(30));
+    snapshot(
+        "topology_polygons_many_light",
+        state,
+        TopologyKind::Polygons,
     );
 }

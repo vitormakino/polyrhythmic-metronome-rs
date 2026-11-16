@@ -1,6 +1,6 @@
 //! The full window's footer: audio output status ("no audio output",
 //! "Audio dropouts: n") and the settings popover with the visual offset
-//! slider. All texts come from the active [`Messages`](crate::i18n::Messages).
+//! slider and the topology choice. All texts come from the active [`Messages`](crate::i18n::Messages).
 
 use std::time::Duration;
 
@@ -10,6 +10,7 @@ use egui::{
     Slider, Stroke, Ui, Vec2, WidgetInfo, pos2, vec2,
 };
 
+use super::topology::TopologyKind;
 use super::widgets;
 use crate::i18n::fill;
 use crate::state::{UiAction, UiState};
@@ -107,21 +108,84 @@ pub(crate) fn footer(
                 .corner_radius(CornerRadius::same(12))
                 .inner_margin(Margin::same(12)),
         )
-        .show(|ui| offset_slider(ui, state, &m.visual_offset, actions));
+        .show(|ui| {
+            offset_slider(ui, state, &m.visual_offset, actions);
+            ui.add_space(12.0);
+            topology_choice(ui, state);
+        });
 }
 
-fn offset_slider(ui: &mut Ui, state: &mut UiState, label: &str, actions: &mut Vec<UiAction>) {
-    let t = state.theme.clone();
-    let (title, _) = ui.allocate_exact_size(vec2(200.0, 14.0), Sense::hover());
+/// Width of the popover's content (pt).
+const POPOVER_WIDTH: f32 = 200.0;
+
+/// The popover's small uppercase heading.
+fn heading(ui: &mut Ui, state: &UiState, label: &str) {
+    let (title, _) = ui.allocate_exact_size(vec2(POPOVER_WIDTH, 14.0), Sense::hover());
     widgets::text(
         ui.painter(),
         title.left_center(),
         Align2::LEFT_CENTER,
         &label.to_uppercase(),
         theme::font_mono(9.0),
-        t.text_muted,
+        state.theme.text_muted,
         1.5,
     );
+}
+
+/// One row per [`TopologyKind`], the current one marked. A click sets
+/// `state.topology`; the shell saves it once the settings settle.
+fn topology_choice(ui: &mut Ui, state: &mut UiState) {
+    let m = state.messages.clone();
+    let t = state.theme.clone();
+    heading(ui, state, &m.topology_style);
+    ui.add_space(4.0);
+    for kind in TopologyKind::ALL {
+        let name = match kind {
+            TopologyKind::Circle => &m.topology_circle,
+            TopologyKind::Strings => &m.topology_strings,
+            TopologyKind::Arcs => &m.topology_arcs,
+            TopologyKind::Orbits => &m.topology_orbits,
+            TopologyKind::Sweep => &m.topology_sweep,
+            TopologyKind::Polygons => &m.topology_polygons,
+            TopologyKind::Hidden => &m.topology_hidden,
+        };
+        let selected = state.topology == kind;
+        let (r, _) = ui.allocate_exact_size(vec2(POPOVER_WIDTH, widgets::MIN_HIT), Sense::hover());
+        let id = ui.make_persistent_id(("topology", kind as usize));
+        let resp = widgets::toggle(ui, r, id, name, selected);
+        let painter = ui.painter();
+        if selected || resp.hovered() {
+            let fill = if selected { t.border } else { t.hover_fill };
+            painter.rect_filled(r, 8.0, fill);
+        }
+        let dot = pos2(r.left() + 14.0, r.center().y);
+        if selected {
+            painter.circle_filled(dot, 4.0, t.accent);
+        } else {
+            painter.circle_stroke(dot, 4.0, Stroke::new(1.0, t.text_faint));
+        }
+        let color = if selected {
+            t.strong
+        } else {
+            widgets::idle_color(&t, &resp, t.text_muted)
+        };
+        widgets::elided(
+            painter,
+            pos2(r.left() + 28.0, r.center().y),
+            Align2::LEFT_CENTER,
+            name,
+            theme::font_semibold(12.0),
+            color,
+            r.width() - 36.0,
+        );
+        if resp.clicked() {
+            state.topology = kind;
+        }
+    }
+}
+
+fn offset_slider(ui: &mut Ui, state: &mut UiState, label: &str, actions: &mut Vec<UiAction>) {
+    heading(ui, state, label);
     ui.add_space(4.0);
     let mut ms = u32::try_from(state.visual_offset.as_millis())
         .unwrap_or(u32::MAX)

@@ -567,3 +567,55 @@ fn mini_session() {
     });
     snapshot("mini_session", DEFAULT_SIZE, true, "default", state);
 }
+
+/// Which pulses the topology draws at full strength while `edit` sets the bar.
+fn drawn_enabled(show_muted_visuals: bool, edit: impl FnOnce(&mut SessionProgress)) -> Vec<bool> {
+    let mut p = plan("Quiet");
+    p.show_muted_visuals = show_muted_visuals;
+    let mut state = running(p, edit);
+    assert_eq!(state.pattern.pulses.len(), 2);
+    state.advance(Instant::now(), 0.016);
+    pm_ui::views::topology::frame(&state)
+        .pulses
+        .iter()
+        .map(|p| p.enabled)
+        .collect()
+}
+
+#[test]
+fn silent_bar_and_muted_pulse_draw_dimmed() {
+    assert_eq!(drawn_enabled(false, |_| {}), [true, true]);
+    // A pulse the stage mutes, and a whole silent bar: dimmed, no effects.
+    assert_eq!(
+        drawn_enabled(false, |p| p.moment.pulses.muted = 0b10),
+        [true, false]
+    );
+    assert_eq!(
+        drawn_enabled(false, |p| p.moment.silent = true),
+        [false, false]
+    );
+    // A plan that shows its muted beats keeps them at full strength.
+    assert_eq!(
+        drawn_enabled(true, |p| p.moment.silent = true),
+        [true, true]
+    );
+}
+
+#[test]
+fn silent_bar_hit_fires_no_effects() {
+    let mut state = running(plan("Quiet"), |p| p.moment.silent = true);
+    let pulse = state.pattern.pulses[0].id;
+    let t0 = Instant::now();
+    // Lit in the bar before; the bar that sounds now is silent.
+    state.on_beat(&BeatEvent {
+        pulse,
+        beat: 1,
+        frame: 0,
+        at: t0,
+        muted: false,
+    });
+    state.advance(t0 + Duration::from_millis(10), 0.016);
+    let frame = pm_ui::views::topology::frame(&state);
+    assert!(frame.pulses[0].phase.is_some(), "it keeps moving");
+    assert_eq!(frame.pulses[0].hit, None);
+}

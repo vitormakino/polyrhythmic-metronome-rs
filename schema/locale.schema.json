@@ -210,6 +210,38 @@
       "description": "Rhythmic topology",
       "type": "string"
     },
+    "topology_arcs": {
+      "description": "Arcs",
+      "type": "string"
+    },
+    "topology_circle": {
+      "description": "Circle",
+      "type": "string"
+    },
+    "topology_hidden": {
+      "description": "Hidden",
+      "type": "string"
+    },
+    "topology_orbits": {
+      "description": "Clock — orbits",
+      "type": "string"
+    },
+    "topology_polygons": {
+      "description": "Polygons",
+      "type": "string"
+    },
+    "topology_strings": {
+      "description": "Strings",
+      "type": "string"
+    },
+    "topology_style": {
+      "description": "Topology",
+      "type": "string"
+    },
+    "topology_sweep": {
+      "description": "Clock — sweep",
+      "type": "string"
+    },
     "tray_bpm_down": {
       "description": "BPM −1",
       "type": "string"
