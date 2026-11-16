@@ -11,7 +11,8 @@ use pm_ui::state::UiState;
 use pm_ui::theme::{self, Theme};
 use pm_ui::views::topology::{
     self as topo, TopologyKind, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius, cursor_x,
-    displacement, orbits_angle, orbits_ball, orbits_is_ring, ring_layout, topology,
+    displacement, orbits_angle, orbits_ball, orbits_is_ring, ring_layout, sweep_angle, sweep_hand,
+    topology,
 };
 
 fn pattern_of(beats: &[u32]) -> Pattern {
@@ -1065,5 +1066,147 @@ fn topology_orbits_many_light() {
         state,
         &[(0, 1, 100), (2, 3, 100), (5, 4, 100)],
         Duration::from_millis(30),
+    );
+}
+
+#[test]
+fn sweep_hand_at_measure_phase() {
+    let center = egui::pos2(100.0, 80.0);
+    // A quarter of the measure: 3 o'clock; half: 6; three quarters: 9.
+    let q = sweep_hand(center, 50.0, 0.25);
+    assert!(
+        (q.x - 150.0).abs() < 1e-3 && (q.y - 80.0).abs() < 1e-3,
+        "{q:?}"
+    );
+    let h = sweep_hand(center, 50.0, 0.5);
+    assert!(
+        (h.x - 100.0).abs() < 1e-3 && (h.y - 130.0).abs() < 1e-3,
+        "{h:?}"
+    );
+    let w = sweep_hand(center, 50.0, 0.75);
+    assert!(
+        (w.x - 50.0).abs() < 1e-3 && (w.y - 80.0).abs() < 1e-3,
+        "{w:?}"
+    );
+    // Constant speed: equal phase steps are equal angle steps.
+    let step = sweep_angle(0.3) - sweep_angle(0.2);
+    assert!((sweep_angle(0.9) - sweep_angle(0.8) - step).abs() < 1e-4);
+}
+
+#[test]
+fn sweep_hand_up_at_beat_one() {
+    let center = egui::pos2(100.0, 80.0);
+    for len in [30.0, 95.0] {
+        let at = sweep_hand(center, len, 0.0);
+        assert!((at.x - center.x).abs() < 1e-3 && (at.y - (80.0 - len)).abs() < 1e-3);
+    }
+    // A whole measure later it is up again.
+    let again = sweep_hand(center, 50.0, 1.0);
+    assert!((again.x - 100.0).abs() < 1e-3 && again.y < 80.0);
+}
+
+#[test]
+fn sweep_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    state.bpm = pm_core::Bpm::new(40);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Sweep, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+    // Dense but under the mark cut-off, with a fast measure.
+    let mut state = playing(&[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 64, 1024]);
+    state.bpm = pm_core::Bpm::new(300);
+    hit_all_at(&mut state, 2, Instant::now(), Duration::from_millis(40));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Sweep, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+#[test]
+fn sweep_stopped_pose_has_no_trail_or_lit_marks() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[4, 3]);
+    hit(&mut state, &[(0, 1, 10), (1, 2, 10)]);
+    let moving = paint_once(&ctx, &state, TopologyKind::Sweep, 360.0);
+    state.playing = false;
+    state.advance(state.now() + Duration::from_millis(16), 0.016);
+    let frame = topo::frame(&state);
+    assert_eq!(frame.measure_phase, None);
+    assert!(frame.pulses.iter().all(|p| p.hit.is_none()));
+    assert_eq!(frame.coincidence_age, None);
+    let stopped = paint_once(&ctx, &state, TopologyKind::Sweep, 360.0);
+    assert!(stopped < moving, "{stopped} vs {moving}");
+    // The same pattern never played: the stopped pose is just rings, marks, hand and dot.
+    let mut fresh = playing(&[4, 3]);
+    fresh.playing = false;
+    fresh.advance(fresh.now() + Duration::from_millis(16), 0.016);
+    assert_eq!(
+        stopped,
+        paint_once(&ctx, &fresh, TopologyKind::Sweep, 360.0)
+    );
+}
+
+/// `state` lit `age` after its hits, painted as Sweep in a card-sized square.
+fn sweep_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
+    let Some(renderer) = renderer() else {
+        eprintln!("SKIPPED {name}: no wgpu adapter available");
+        return;
+    };
+    state.topology = TopologyKind::Sweep;
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    let ids = ids(&state);
+    for &(i, beat, frame) in hits {
+        state.on_beat(&BeatEvent {
+            pulse: ids[i],
+            beat,
+            frame,
+            at,
+            muted: false,
+        });
+    }
+    state.advance(at + age, 0.0);
+    let size = 360.0;
+    let mut h = Harness::builder()
+        .with_size(Vec2::splat(size + 16.0))
+        .with_context_setup(theme::install)
+        .renderer(renderer)
+        .build_ui_state(
+            move |ui, state: &mut UiState| {
+                let card = state.theme.card;
+                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
+                let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::splat(size));
+                topo::paint(TopologyKind::Sweep, ui, state, rect);
+            },
+            state,
+        );
+    h.run();
+    h.snapshot_options(
+        name,
+        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
+    );
+}
+
+#[test]
+fn topology_sweep_hit_dark() {
+    sweep_snapshot(
+        "topology_sweep_hit_dark",
+        pt_br(playing(&[3, 4, 5])),
+        &[(0, 1, 100), (1, 2, 100), (2, 0, 100)],
+        Duration::from_millis(40),
+    );
+}
+
+#[test]
+fn topology_sweep_coincidence_light() {
+    let mut state = pt_br(playing(&[3, 4, 5]));
+    state.theme = Arc::new(Theme::builtin("light").unwrap());
+    sweep_snapshot(
+        "topology_sweep_coincidence_light",
+        state,
+        &[(0, 0, 100), (1, 0, 100), (2, 0, 100)],
+        Duration::from_millis(50),
     );
 }

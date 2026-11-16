@@ -9,6 +9,7 @@ mod circle;
 pub mod fx;
 mod orbits;
 mod strings;
+mod sweep;
 
 use egui::{Align2, Color32, Rect, Response, Role, Sense, Ui, WidgetInfo, pos2, vec2};
 use pm_core::PulseId;
@@ -18,6 +19,7 @@ pub use arcs::{ArcsStyle, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius};
 pub use circle::{CircleStyle, RingGeom, dot_radius, polygon_visible, ring_gap, ring_layout};
 pub use orbits::{OrbitsStyle, orbits_angle, orbits_ball, orbits_is_ring};
 pub use strings::{StringsStyle, cursor_x, displacement};
+pub use sweep::{SweepStyle, sweep_angle, sweep_hand};
 
 use super::widgets;
 use crate::state::{Hit, UiState};
@@ -206,10 +208,9 @@ fn draw(kind: TopologyKind, ui: &Ui, state: &UiState, rect: Rect, response: &Res
         TopologyKind::Strings => strings::paint(&painter, &frame, area),
         TopologyKind::Arcs => arcs::paint(&painter, &frame, area),
         TopologyKind::Orbits => orbits::paint(&painter, &frame, area),
+        TopologyKind::Sweep => sweep::paint(&painter, &frame, area),
         // The other designs come in later tasks; until then they show the circle.
-        TopologyKind::Circle | TopologyKind::Sweep | TopologyKind::Polygons => {
-            circle::paint(&painter, &frame, area)
-        }
+        TopologyKind::Circle | TopologyKind::Polygons => circle::paint(&painter, &frame, area),
     }
     indicators(&painter, rect, strip, state);
 }
