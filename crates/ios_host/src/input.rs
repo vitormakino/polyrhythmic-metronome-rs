@@ -1,7 +1,7 @@
 //! What UIKit hands the host, as egui input. Pure, so it is tested on the Mac.
 
 use egui::epaint::MarginF32;
-use egui::{Event, PointerButton, Pos2, SafeAreaInsets};
+use egui::{Event, PointerButton, Pos2, SafeAreaInsets, TouchDeviceId, TouchId};
 
 /// Where a touch is in its life (`UITouchPhase`, as the view's
 /// `touches…:withEvent:` methods report it).
@@ -13,11 +13,13 @@ pub enum TouchPhase {
     Cancelled,
 }
 
-/// One touch as egui pointer events: the pointer moves to it, a press on
-/// `Began`, a release and the pointer leaving on `Ended` (a finger has no
-/// hover, so nothing stays hovered after it lifts). `Cancelled` (the system
-/// took the touch) only makes the pointer leave: its release must reach egui
-/// a frame later, which [`TouchQueue`] does.
+/// One touch as egui events, the way egui-winit sends it: first the touch
+/// itself (so egui knows there is a touch screen and scrolls lists by
+/// dragging them), then the same touch as the pointer. The pointer moves to
+/// it, a press on `Began`, a release and the pointer leaving on `Ended` (a
+/// finger has no hover, so nothing stays hovered after it lifts).
+/// `Cancelled` (the system took the touch) only makes the pointer leave: its
+/// release must reach egui a frame later, which [`TouchQueue`] does.
 pub fn touch_events(pos: Pos2, phase: TouchPhase) -> Vec<Event> {
     let button = |pressed| Event::PointerButton {
         pos,
@@ -25,7 +27,20 @@ pub fn touch_events(pos: Pos2, phase: TouchPhase) -> Vec<Event> {
         pressed,
         modifiers: Default::default(),
     };
-    let mut events = vec![Event::PointerMoved(pos)];
+    let touch = Event::Touch {
+        // Multiple touch is off: one device, one finger.
+        device_id: TouchDeviceId(0),
+        id: TouchId(0),
+        phase: match phase {
+            TouchPhase::Began => egui::TouchPhase::Start,
+            TouchPhase::Moved => egui::TouchPhase::Move,
+            TouchPhase::Ended => egui::TouchPhase::End,
+            TouchPhase::Cancelled => egui::TouchPhase::Cancel,
+        },
+        pos,
+        force: None,
+    };
+    let mut events = vec![touch, Event::PointerMoved(pos)];
     match phase {
         TouchPhase::Began => events.push(button(true)),
         TouchPhase::Moved => {}
@@ -102,6 +117,16 @@ mod tests {
         Event::PointerMoved(p)
     }
 
+    fn touch(p: Pos2, phase: egui::TouchPhase) -> Event {
+        Event::Touch {
+            device_id: egui::TouchDeviceId(0),
+            id: egui::TouchId(0),
+            phase,
+            pos: p,
+            force: None,
+        }
+    }
+
     fn button(p: Pos2, pressed: bool) -> Event {
         Event::PointerButton {
             pos: p,
@@ -116,7 +141,7 @@ mod tests {
         let p = Pos2::new(10.0, 20.0);
         assert_eq!(
             touch_events(p, TouchPhase::Began),
-            vec![moved(p), button(p, true)]
+            vec![touch(p, egui::TouchPhase::Start), moved(p), button(p, true)]
         );
     }
 
@@ -137,10 +162,14 @@ mod tests {
         assert_eq!(
             events,
             vec![
+                touch(a, egui::TouchPhase::Start),
                 moved(a),
                 button(a, true),
+                touch(b, egui::TouchPhase::Move),
                 moved(b),
+                touch(c, egui::TouchPhase::Move),
                 moved(c),
+                touch(c, egui::TouchPhase::End),
                 moved(c),
                 button(c, false),
                 Event::PointerGone,
@@ -153,7 +182,11 @@ mod tests {
         let p = Pos2::new(5.0, 6.0);
         assert_eq!(
             touch_events(p, TouchPhase::Cancelled),
-            vec![moved(p), Event::PointerGone]
+            vec![
+                touch(p, egui::TouchPhase::Cancel),
+                moved(p),
+                Event::PointerGone
+            ]
         );
     }
 
@@ -162,9 +195,9 @@ mod tests {
         let p = Pos2::new(5.0, 6.0);
         let mut queue = TouchQueue::default();
         queue.push(p, TouchPhase::Began);
-        assert_eq!(queue.take_frame(), vec![moved(p), button(p, true)]);
+        assert_eq!(queue.take_frame(), touch_events(p, TouchPhase::Began));
         queue.push(p, TouchPhase::Cancelled);
-        assert_eq!(queue.take_frame(), vec![moved(p), Event::PointerGone]);
+        assert_eq!(queue.take_frame(), touch_events(p, TouchPhase::Cancelled));
         assert_eq!(queue.take_frame(), vec![button(p, false)]);
         assert_eq!(queue.take_frame(), vec![]);
     }
@@ -177,10 +210,9 @@ mod tests {
         queue.push(a, TouchPhase::Cancelled);
         let _ = queue.take_frame();
         queue.push(b, TouchPhase::Began);
-        assert_eq!(
-            queue.take_frame(),
-            vec![button(a, false), moved(b), button(b, true)]
-        );
+        let mut expected = vec![button(a, false)];
+        expected.extend(touch_events(b, TouchPhase::Began));
+        assert_eq!(queue.take_frame(), expected);
     }
 
     #[test]
@@ -190,10 +222,9 @@ mod tests {
         let mut queue = TouchQueue::default();
         queue.push(a, TouchPhase::Cancelled);
         queue.push(b, TouchPhase::Began);
-        assert_eq!(
-            queue.take_frame(),
-            vec![moved(a), Event::PointerGone, moved(b), button(b, true)]
-        );
+        let mut expected = touch_events(a, TouchPhase::Cancelled);
+        expected.extend(touch_events(b, TouchPhase::Began));
+        assert_eq!(queue.take_frame(), expected);
         assert_eq!(queue.take_frame(), vec![]);
     }
 
@@ -271,6 +302,70 @@ mod tests {
         use TouchPhase::*;
         let out = on_button(&[(0.0, Began), (0.0, Cancelled), (0.0, Began), (0.0, Ended)]);
         assert!(out.clicked && !out.down);
+    }
+
+    /// A finger dragged up a list of buttons, one frame per step through a
+    /// [`TouchQueue`]: how far the list scrolled and whether a button clicked.
+    fn drag_list(dy: f32) -> (f32, bool) {
+        fn frame(ctx: &egui::Context, events: Vec<Event>, t: f64) -> (f32, bool) {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    egui::vec2(400.0, 300.0),
+                )),
+                time: Some(t),
+                events,
+                ..Default::default()
+            };
+            let mut out = (0.0, false);
+            let mut output = ctx.run_ui(raw, |ui| {
+                let scroll = egui::ScrollArea::vertical().show(ui, |ui| {
+                    for i in 0..40 {
+                        out.1 |= ui.button(format!("beat {i}")).clicked();
+                    }
+                });
+                out.0 = scroll.state.clamped_offset().y;
+            });
+            output.textures_delta.clear(); // egui asserts it is consumed
+            out
+        }
+        let ctx = egui::Context::default();
+        let mut queue = TouchQueue::default();
+        let start = Pos2::new(30.0, 200.0);
+        let mut t = 0.0;
+        // egui picks what a touch drags when it lands, from the last frame's
+        // widgets, and the list only takes drags once egui has seen a touch:
+        // the first touch since launch (here a tap on the blank side) cannot
+        // scroll yet.
+        let side = Pos2::new(390.0, 290.0);
+        for phase in [TouchPhase::Began, TouchPhase::Ended] {
+            queue.push(side, phase);
+            frame(&ctx, queue.take_frame(), t);
+            t += 1.0 / 60.0;
+        }
+        let mut clicked = frame(&ctx, Vec::new(), t).1;
+        let steps = 10;
+        for i in 0..=steps {
+            let phase = match i {
+                0 => TouchPhase::Began,
+                i if i == steps => TouchPhase::Ended,
+                _ => TouchPhase::Moved,
+            };
+            let p = start - egui::vec2(0.0, dy * i as f32 / steps as f32);
+            queue.push(p, phase);
+            t += 1.0 / 60.0;
+            clicked |= frame(&ctx, queue.take_frame(), t).1;
+        }
+        t += 1.0 / 60.0;
+        let (offset, c) = frame(&ctx, queue.take_frame(), t);
+        (offset, clicked || c)
+    }
+
+    #[test]
+    fn dragging_a_list_with_a_finger_scrolls_it_without_clicking() {
+        let (offset, clicked) = drag_list(150.0);
+        assert!(offset >= 140.0, "scrolled only {offset}");
+        assert!(!clicked);
     }
 
     #[test]
