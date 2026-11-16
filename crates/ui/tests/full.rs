@@ -785,6 +785,29 @@ fn hidden_shows_indicators_in_header() {
     assert!(light.right() <= add.left(), "{light:?} left of {add:?}");
 }
 
+#[test]
+fn hidden_header_keeps_both_lights_on_the_phone() {
+    for state in [
+        three_pulses(TopologyKind::Hidden),
+        pt_br(three_pulses(TopologyKind::Hidden)),
+    ] {
+        let coincidence = state.messages.coincidence.clone();
+        let add_pulse = state.messages.add_pulse.clone();
+        let h = harness(PHONE, state);
+        let add = h.get_by_label(&add_pulse).rect();
+        let engine = h.get_by_label("ENGINE").rect();
+        let light = h.get_by_label(&coincidence).rect();
+        for node in [light, engine] {
+            assert!(
+                node.right() <= add.left(),
+                "{coincidence}: {node:?} runs into {add:?}"
+            );
+            assert!(add.y_range().contains(node.center().y), "{node:?}");
+        }
+        assert!(light.right() <= engine.left(), "{light:?} {engine:?}");
+    }
+}
+
 fn snapshot_topology(name: &str, size: Vec2, kind: TopologyKind) {
     let Some(renderer) = renderer() else {
         eprintln!("SKIPPED {name}: no wgpu adapter available");

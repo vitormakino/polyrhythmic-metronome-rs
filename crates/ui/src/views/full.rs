@@ -323,15 +323,13 @@ fn pulses_header(ui: &Ui, rect: Rect, state: &mut UiState, actions: &mut Vec<UiA
             title.right() + HEADER_GAP..=r.left() - HEADER_GAP,
             rect.y_range(),
         );
-        let (coincidence, engine) = topology::indicators(painter, slot, slot.height(), state);
+        let (coincidence, engine) = topology::header_indicators(painter, slot, state);
         for (key, label, painted) in [
-            ("header-coincidence", &m.coincidence, Some(coincidence)),
+            ("header-coincidence", &m.coincidence, coincidence),
             ("header-engine", &m.engine, engine),
         ] {
-            if let Some(painted) = painted {
-                let node = ui.interact(painted, ui.make_persistent_id(key), Sense::hover());
-                node.widget_info(|| WidgetInfo::labeled(Role::Label, true, label));
-            }
+            let node = ui.interact(painted, ui.make_persistent_id(key), Sense::hover());
+            node.widget_info(|| WidgetInfo::labeled(Role::Label, true, label));
         }
     }
     let enabled = state.pattern.pulses.len() < MAX_PULSES;

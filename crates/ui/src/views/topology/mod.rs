@@ -229,6 +229,17 @@ pub(crate) fn strip_height(size: f32) -> f32 {
     (size * 0.1).clamp(18.0, 30.0)
 }
 
+/// Radius of an indicator light, pt.
+const LIGHT: f32 = 3.0;
+/// Letter spacing of the indicator labels.
+const LABEL_SPACING: f32 = 1.2;
+/// Between a light and its label, pt.
+const LABEL_GAP: f32 = 6.0;
+/// Between the two indicators, pt.
+const BETWEEN: f32 = 20.0;
+/// Width a light takes (lit, it grows by a quarter).
+const LIGHT_W: f32 = 2.0 * LIGHT * 1.25;
+
 /// Coincidence light and engine status, centred in the bottom `strip`
 /// points of `rect`: under the drawing, or in the pulses header when the
 /// topology is hidden. Returns the painted labels' rects, coincidence first;
@@ -239,19 +250,14 @@ pub(crate) fn indicators(
     strip: f32,
     state: &UiState,
 ) -> (Rect, Option<Rect>) {
-    const LIGHT: f32 = 3.0;
-    const SPACING: f32 = 1.2;
-    const GAP: f32 = 6.0;
-    const BETWEEN: f32 = 20.0;
     let m = &state.messages;
     let t = &state.theme;
     let font = theme::font_mono(8.0);
     let y = rect.bottom() - strip / 2.0;
-    let coincidence_w = widgets::text_width(painter, &m.coincidence, font.clone(), SPACING);
-    let engine_w = widgets::text_width(painter, &m.engine, font.clone(), SPACING);
-    let light_w = 2.0 * LIGHT * 1.25;
-    let first = light_w + GAP + coincidence_w;
-    let second = engine_w + GAP + light_w;
+    let coincidence_w = widgets::text_width(painter, &m.coincidence, font.clone(), LABEL_SPACING);
+    let engine_w = widgets::text_width(painter, &m.engine, font.clone(), LABEL_SPACING);
+    let first = LIGHT_W + LABEL_GAP + coincidence_w;
+    let second = engine_w + LABEL_GAP + LIGHT_W;
     // The engine light is dropped when the area is too narrow for both.
     let both = first + BETWEEN + second <= rect.width();
     let total = if both {
@@ -261,15 +267,8 @@ pub(crate) fn indicators(
     };
     let mut x = rect.center().x - total / 2.0;
 
-    let lit = state.coincidence();
-    let light = pos2(x + light_w / 2.0, y);
-    if lit {
-        theme::paint_glow(painter, light, 9.0, t.strong, 1.0);
-        painter.circle_filled(light, LIGHT * 1.25, t.strong);
-    } else {
-        painter.circle_filled(light, LIGHT, t.border);
-    }
-    x += light_w + GAP;
+    coincidence_light(painter, pos2(x + LIGHT_W / 2.0, y), state);
+    x += LIGHT_W + LABEL_GAP;
     let coincidence = widgets::text(
         painter,
         pos2(x, y),
@@ -277,7 +276,7 @@ pub(crate) fn indicators(
         &m.coincidence,
         font.clone(),
         t.text_muted,
-        SPACING,
+        LABEL_SPACING,
     );
     if !both {
         return (coincidence, None);
@@ -290,14 +289,64 @@ pub(crate) fn indicators(
         &m.engine,
         font,
         t.text_muted,
-        SPACING,
+        LABEL_SPACING,
     );
-    let light = pos2(x + engine_w + GAP + light_w / 2.0, y);
-    if state.playing {
-        theme::paint_glow(painter, light, 8.0, t.accent, 0.8);
-        painter.circle_filled(light, LIGHT, t.accent);
-    } else {
-        painter.circle_filled(light, LIGHT, t.dot_inactive);
-    }
+    engine_light(
+        painter,
+        pos2(x + engine_w + LABEL_GAP + LIGHT_W / 2.0, y),
+        state,
+    );
     (coincidence, Some(engine))
+}
+
+/// The indicators in the pulses header (topology hidden), centred in
+/// `rect`: with their labels when both fit, else the two lights alone, so
+/// neither disappears. Returns the coincidence's and the engine's rects (a
+/// label, or the light alone) for their AccessKit nodes.
+pub(crate) fn header_indicators(
+    painter: &egui::Painter,
+    rect: Rect,
+    state: &UiState,
+) -> (Rect, Rect) {
+    let font = theme::font_mono(8.0);
+    let m = &state.messages;
+    let labelled = 2.0 * (LIGHT_W + LABEL_GAP)
+        + BETWEEN
+        + widgets::text_width(painter, &m.coincidence, font.clone(), LABEL_SPACING)
+        + widgets::text_width(painter, &m.engine, font, LABEL_SPACING);
+    if labelled <= rect.width()
+        && let (coincidence, Some(engine)) = indicators(painter, rect, rect.height(), state)
+    {
+        return (coincidence, engine);
+    }
+    let y = rect.center().y;
+    let step = (LIGHT_W + BETWEEN) / 2.0;
+    let left = pos2(rect.center().x - step, y);
+    let right = pos2(rect.center().x + step, y);
+    coincidence_light(painter, left, state);
+    engine_light(painter, right, state);
+    let node = |at| Rect::from_center_size(at, vec2(LIGHT_W + LABEL_GAP, rect.height()));
+    (node(left), node(right))
+}
+
+/// The coincidence light at `at`: glowing while the pulses coincide.
+fn coincidence_light(painter: &egui::Painter, at: egui::Pos2, state: &UiState) {
+    let t = &state.theme;
+    if state.coincidence() {
+        theme::paint_glow(painter, at, 9.0, t.strong, 1.0);
+        painter.circle_filled(at, LIGHT * 1.25, t.strong);
+    } else {
+        painter.circle_filled(at, LIGHT, t.border);
+    }
+}
+
+/// The engine light at `at`: glowing while playing.
+fn engine_light(painter: &egui::Painter, at: egui::Pos2, state: &UiState) {
+    let t = &state.theme;
+    if state.playing {
+        theme::paint_glow(painter, at, 8.0, t.accent, 0.8);
+        painter.circle_filled(at, LIGHT, t.accent);
+    } else {
+        painter.circle_filled(at, LIGHT, t.dot_inactive);
+    }
 }
