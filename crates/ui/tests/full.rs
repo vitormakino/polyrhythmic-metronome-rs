@@ -842,6 +842,36 @@ fn full_375_strings() {
     );
 }
 
+/// Arcs on the phone layout: three pulses, one hit still young.
+#[test]
+fn full_375_arcs() {
+    let Some(renderer) = renderer() else {
+        eprintln!("SKIPPED full_375_arcs: no wgpu adapter available");
+        return;
+    };
+    let mut state = pt_br(three_pulses(TopologyKind::Arcs));
+    state.theme = Arc::new(Theme::builtin("default").expect("theme exists"));
+    state.playing = true;
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    let id = state.pattern.pulses[1].id;
+    state.on_beat(&BeatEvent {
+        pulse: id,
+        beat: 1,
+        frame: 100,
+        at,
+        muted: false,
+    });
+    state.advance(at + Duration::from_millis(30), 0.0);
+    let mut h = harness_with(PHONE, state, Some(renderer));
+    h.remove_cursor();
+    h.run();
+    h.snapshot_options(
+        "full_375_arcs",
+        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
+    );
+}
+
 #[test]
 fn strings_card_is_low_and_the_list_gets_the_height() {
     let circle = harness(PHONE, three_pulses(TopologyKind::Circle));

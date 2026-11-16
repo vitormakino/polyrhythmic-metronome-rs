@@ -10,7 +10,8 @@ use pm_ui::i18n::Messages;
 use pm_ui::state::UiState;
 use pm_ui::theme::{self, Theme};
 use pm_ui::views::topology::{
-    self as topo, TopologyKind, cursor_x, displacement, ring_layout, topology,
+    self as topo, TopologyKind, arcs_ball, arcs_radius, cursor_x, displacement, ring_layout,
+    topology,
 };
 
 fn pattern_of(beats: &[u32]) -> Pattern {
@@ -754,5 +755,124 @@ fn topology_strings_many_light() {
         state,
         &[(0, 5, 100), (1, 11, 100), (5, 31, 100), (6, 40, 100)],
         Duration::from_millis(30),
+    );
+}
+
+#[test]
+fn arcs_ball_on_baseline_at_each_beat() {
+    let center = egui::pos2(100.0, 80.0);
+    for k in 0..8 {
+        let at = arcs_ball(center, 50.0, f64::from(k));
+        assert!((at.y - center.y).abs() < 1e-3, "{k}: {at:?}");
+    }
+    // Halfway through a beat it is at the top of the arc.
+    let top = arcs_ball(center, 50.0, 2.5);
+    assert!((top.y - (center.y - 50.0)).abs() < 1e-3, "{top:?}");
+    assert!((top.x - center.x).abs() < 1e-3, "{top:?}");
+}
+
+#[test]
+fn arcs_all_left_at_beat_one() {
+    let center = egui::pos2(100.0, 80.0);
+    for r in [20.0, 50.0, 90.0] {
+        let at = arcs_ball(center, r, 0.0);
+        assert!((at.x - (center.x - r)).abs() < 1e-3, "{r}: {at:?}");
+    }
+}
+
+#[test]
+fn arcs_alternate_direction() {
+    let center = egui::pos2(0.0, 0.0);
+    // Even beat: left to right. Odd beat: right to left.
+    assert!(arcs_ball(center, 10.0, 0.1).x < -5.0);
+    assert!(arcs_ball(center, 10.0, 0.9).x > 5.0);
+    assert!(arcs_ball(center, 10.0, 1.1).x > 5.0);
+    assert!(arcs_ball(center, 10.0, 1.9).x < -5.0);
+    assert!(arcs_ball(center, 10.0, 2.1).x < -5.0);
+    // And at constant speed: equal phase steps move it equal angles.
+    let a = arcs_ball(center, 10.0, 0.25);
+    let b = arcs_ball(center, 10.0, 0.5);
+    assert!((a.to_vec2().angle() - b.to_vec2().angle()).abs() > 0.5);
+}
+
+#[test]
+fn arcs_radii_span_30_to_95_percent() {
+    assert!((arcs_radius(0, 3, 100.0) - 95.0).abs() < 1e-4);
+    assert!((arcs_radius(2, 3, 100.0) - 30.0).abs() < 1e-4);
+    assert!(arcs_radius(0, 1, 100.0) > 90.0);
+    assert!(arcs_radius(0, 16, 100.0) > arcs_radius(1, 16, 100.0));
+}
+
+#[test]
+fn arcs_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Arcs, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+/// `state` lit `age` after its hits, painted as Arcs in a card-sized 2:1 area.
+fn arcs_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
+    let Some(renderer) = renderer() else {
+        eprintln!("SKIPPED {name}: no wgpu adapter available");
+        return;
+    };
+    state.topology = TopologyKind::Arcs;
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    let ids = ids(&state);
+    for &(i, beat, frame) in hits {
+        state.on_beat(&BeatEvent {
+            pulse: ids[i],
+            beat,
+            frame,
+            at,
+            muted: false,
+        });
+    }
+    state.advance(at + age, 0.0);
+    let (width, height) = (360.0, 180.0);
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(width + 16.0, height + 16.0))
+        .with_context_setup(theme::install)
+        .renderer(renderer)
+        .build_ui_state(
+            move |ui, state: &mut UiState| {
+                let card = state.theme.card;
+                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
+                let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::new(width, height));
+                topo::paint(TopologyKind::Arcs, ui, state, rect);
+            },
+            state,
+        );
+    h.run();
+    h.snapshot_options(
+        name,
+        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
+    );
+}
+
+#[test]
+fn topology_arcs_hit_dark() {
+    arcs_snapshot(
+        "topology_arcs_hit_dark",
+        pt_br(playing(&[3, 4, 5])),
+        &[(0, 1, 100), (1, 2, 100), (2, 0, 100)],
+        Duration::from_millis(40),
+    );
+}
+
+#[test]
+fn topology_arcs_coincidence_light() {
+    let mut state = pt_br(playing(&[3, 4, 5]));
+    state.theme = Arc::new(Theme::builtin("light").unwrap());
+    arcs_snapshot(
+        "topology_arcs_coincidence_light",
+        state,
+        &[(0, 0, 100), (1, 0, 100), (2, 0, 100)],
+        Duration::from_millis(50),
     );
 }

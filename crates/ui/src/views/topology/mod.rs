@@ -4,6 +4,7 @@
 //! given, and tells the layout its [`Shape`]. The coincidence and engine
 //! lights sit in a strip under any visible design.
 
+mod arcs;
 mod circle;
 pub mod fx;
 mod strings;
@@ -12,6 +13,7 @@ use egui::{Align2, Color32, Rect, Response, Role, Sense, Ui, WidgetInfo, pos2, v
 use pm_core::PulseId;
 use serde::{Deserialize, Serialize};
 
+pub use arcs::{ArcsStyle, arcs_ball, arcs_radius};
 pub use circle::{CircleStyle, RingGeom, dot_radius, polygon_visible, ring_gap, ring_layout};
 pub use strings::{StringsStyle, cursor_x, displacement};
 
@@ -112,6 +114,9 @@ pub struct TopologyFrame<'a> {
     pub pulses: Vec<PulseView>,
     /// Where the measure is, in `[0, 1)`; `None` while stopped.
     pub measure_phase: Option<f64>,
+    /// Length of the measure, seconds (pulse 0's beats at the shown tempo):
+    /// what turns phase steps into time.
+    pub measure_secs: f64,
     /// Seconds since the coincidence, while one shows.
     pub coincidence_age: Option<f32>,
     /// The transport is running.
@@ -152,6 +157,8 @@ pub fn frame(state: &UiState) -> TopologyFrame<'_> {
     TopologyFrame {
         pulses,
         measure_phase: state.measure_phase(),
+        measure_secs: f64::from(state.pattern.reference_beats().max(1)) * 60.0
+            / f64::from(state.shown_bpm().get()),
         coincidence_age: state.coincidence_age(),
         playing: state.playing,
         theme: t,
@@ -191,9 +198,9 @@ fn draw(kind: TopologyKind, ui: &Ui, state: &UiState, rect: Rect, response: &Res
     match kind {
         TopologyKind::Hidden => {}
         TopologyKind::Strings => strings::paint(&painter, &frame, area),
+        TopologyKind::Arcs => arcs::paint(&painter, &frame, area),
         // The other designs come in later tasks; until then they show the circle.
         TopologyKind::Circle
-        | TopologyKind::Arcs
         | TopologyKind::Orbits
         | TopologyKind::Sweep
         | TopologyKind::Polygons => circle::paint(&painter, &frame, area),
