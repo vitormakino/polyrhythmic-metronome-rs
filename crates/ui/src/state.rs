@@ -167,8 +167,9 @@ impl Default for UiState {
 impl UiState {
     /// Queues a beat from the engine; it lights in [`Self::advance`] once its time comes.
     /// Ignored while stopped, so beats still in flight after Stop never light.
+    /// Every event, muted or not, anchors the measure clock first.
     /// At most [`PENDING_BEATS_CAP`] beats wait; the oldest is dropped first.
-    /// A hit the session silenced (`muted`) is ignored too, unless the
+    /// A hit the session silenced (`muted`) does not light, unless the
     /// session plan shows muted visuals.
     pub fn on_beat(&mut self, ev: &BeatEvent) {
         if !self.playing {

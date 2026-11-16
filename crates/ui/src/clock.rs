@@ -36,6 +36,8 @@ fn wrap_error(d: f64) -> f64 {
 #[derive(Debug, Clone)]
 pub struct MeasureClock {
     running: bool,
+    /// The base is a guess (Play or reset), not a beat: the next anchor replaces it.
+    provisional: bool,
     /// Measure length in seconds.
     measure: f64,
     /// Linear part: `base_phase` at `base_at`, advancing one per `measure`.
@@ -51,6 +53,7 @@ impl Default for MeasureClock {
     fn default() -> Self {
         Self {
             running: false,
+            provisional: false,
             measure: DEFAULT_MEASURE,
             base_at: Instant::now(),
             base_phase: 0.0,
@@ -83,9 +86,10 @@ impl MeasureClock {
             let predicted = self.raw_at(at);
             let e = wrap_error(phase - predicted);
             self.base_at = at;
-            if e.abs() > SNAP {
+            if self.provisional || e.abs() > SNAP {
                 self.base_phase = phase;
                 self.slew = None;
+                self.provisional = false;
             } else {
                 self.base_phase = predicted;
                 self.slew = Some((at, e));
@@ -97,6 +101,7 @@ impl MeasureClock {
     /// Anchors already waiting are kept.
     pub fn start(&mut self, at: Instant) {
         self.running = true;
+        self.provisional = true;
         self.base_at = at;
         self.base_phase = 0.0;
         self.slew = None;
@@ -155,6 +160,7 @@ impl MeasureClock {
     pub fn reset(&mut self) {
         self.waiting.clear();
         self.slew = None;
+        self.provisional = true;
     }
 }
 
@@ -253,6 +259,34 @@ mod tests {
         c.start(t0);
         c.set_measure(t0, 2.0);
         near(c.phase(t0 + ms(1000)), 0.5);
+    }
+
+    #[test]
+    fn first_anchor_after_start_replaces_the_guess() {
+        let t0 = Instant::now();
+        let mut c = MeasureClock::default();
+        c.start(t0);
+        c.set_measure(t0, 2.0);
+        // The first beat arrives 200 ms after Play: small error, still snaps.
+        let at = t0 + ms(200);
+        c.anchor(at, 0, 4);
+        near(c.phase(at), 0.0);
+        let mut last = c.phase(at).unwrap();
+        for i in 1..=12 {
+            let p = c.phase(at + ms(10 * i)).unwrap();
+            assert!(p >= last, "went backwards: {last} -> {p}");
+            last = p;
+        }
+    }
+
+    #[test]
+    fn anchor_after_reset_snaps() {
+        let (mut c, t0) = anchored();
+        c.reset();
+        // Prediction at +1 s is 0.5; a small error that would otherwise slew.
+        let at = t0 + ms(1000);
+        c.anchor(at, 48, 100);
+        near(c.phase(at), 0.48);
     }
 
     #[test]
