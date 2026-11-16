@@ -10,9 +10,9 @@ use pm_ui::i18n::Messages;
 use pm_ui::state::UiState;
 use pm_ui::theme::{self, Theme};
 use pm_ui::views::topology::{
-    self as topo, TopologyKind, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius, cursor_x,
-    displacement, orbits_angle, orbits_ball, orbits_is_ring, ring_layout, sweep_angle, sweep_hand,
-    topology,
+    self as topo, TopologyKind, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius, arcs_too_fast,
+    cursor_x, displacement, orbits_angle, orbits_ball, orbits_is_ring, ring_layout, sweep_angle,
+    sweep_hand, topology,
 };
 
 fn pattern_of(beats: &[u32]) -> Pattern {
@@ -693,6 +693,23 @@ fn strings_shape_budget() {
     assert!(shapes < 20_000, "{shapes} shapes");
 }
 
+#[test]
+fn strings_old_hit_keeps_its_mark() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    // A hit 3 s old has stopped ringing: its beat shows the idle mark again,
+    // like every other beat, so the shapes match a pulse never hit.
+    let mut old = playing(&[4, 3]);
+    hit_all_at(&mut old, 1, Instant::now(), Duration::from_secs(3));
+    assert!(topo::frame(&old).pulses.iter().all(|p| p.hit.is_some()));
+    let mut fresh = playing(&[4, 3]);
+    fresh.advance(Instant::now(), 0.0);
+    assert_eq!(
+        paint_once(&ctx, &old, TopologyKind::Strings, 360.0),
+        paint_once(&ctx, &fresh, TopologyKind::Strings, 360.0)
+    );
+}
+
 /// `state` lit `age` after its hits, painted as Strings in a card-sized low band.
 fn strings_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
     let Some(renderer) = renderer() else {
@@ -901,6 +918,26 @@ fn arcs_all_on_baseline_at_beat_one() {
             assert!((at.y - center.y).abs() < 1e-3, "{beats} {measure}: {at:?}");
         }
     }
+}
+
+#[test]
+fn arcs_fast_pulse_drops_its_ball() {
+    // 8 beats against a reference of 1 at 300 BPM: a crossing lasts 0.2 / 8 = 25 ms.
+    let mut state = playing(&[1, 8]);
+    state.bpm = pm_core::Bpm::new(300);
+    hit(&mut state, &[(0, 0, 100)]);
+    let frame = topo::frame(&state);
+    assert!(arcs_too_fast(frame.measure_secs, 8));
+    assert!(!arcs_too_fast(frame.measure_secs, 1));
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let fast = paint_once(&ctx, &state, TopologyKind::Arcs, 360.0);
+    // The same pattern slowly: the 8-beat pulse gets its ball and trail back.
+    state.bpm = pm_core::Bpm::new(40);
+    hit(&mut state, &[(0, 0, 100)]);
+    assert!(!arcs_too_fast(topo::frame(&state).measure_secs, 8));
+    let slow = paint_once(&ctx, &state, TopologyKind::Arcs, 360.0);
+    assert!(fast < slow, "{fast} vs {slow}");
 }
 
 #[test]

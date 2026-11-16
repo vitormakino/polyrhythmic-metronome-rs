@@ -31,6 +31,9 @@ pub struct ArcsStyle {
     pub trail: usize,
     /// Step between trail positions, s.
     pub trail_step: f32,
+    /// A crossing shorter than this, s, draws no ball: only the arc, a
+    /// little brighter, and its ripple (the same limit as the orbits).
+    pub min_cross_secs: f32,
     /// Peak shake of the whole drawing on a coincidence, pt (0..=5).
     pub shake: f32,
     /// Time constant of the shake and the coincidence glow, s (0.1..=0.4).
@@ -48,6 +51,7 @@ impl ArcsStyle {
         ripple_reach: 22.0,
         trail: 12,
         trail_step: 1.0 / 60.0,
+        min_cross_secs: 0.15,
         shake: 3.0,
         shake_tau: 0.22,
     };
@@ -120,6 +124,13 @@ pub fn arcs_contact(
         measures
     };
     arcs_ball_at(center, r, f64::from(beat), measure * u64::from(beats))
+}
+
+/// Whether a pulse of `beats` beats in a measure of `measure_secs` crosses
+/// its arc too fast to follow (`measure_secs / beats` under 0.15 s): it
+/// would only strobe, so it draws no ball.
+pub fn arcs_too_fast(measure_secs: f64, beats: u32) -> bool {
+    measure_secs / f64::from(beats.max(1)) < f64::from(ArcsStyle::DEFAULT.min_cross_secs)
 }
 
 /// The points of the half circle of radius `r` over `center`, left to right.
@@ -197,8 +208,11 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
             _ => pulse.color,
         };
         let energy = if lit { energy } else { 0.0 };
+        let fast = arcs_too_fast(measure_secs, pulse.beats);
 
-        // The arc, glowing while the pulse is hit.
+        // The arc, glowing while the pulse is hit; a fast pulse's ball is
+        // smeared over all of it.
+        let base = if fast { 0.4 } else { 0.25 };
         let points = arc_points(center, r, ARC_SEGMENTS);
         if lit {
             painter.add(Shape::line(
@@ -210,7 +224,7 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
             points,
             Stroke::new(
                 1.5 + 1.5 * energy,
-                theme::with_alpha(color, (0.25 + 0.6 * energy) * opacity),
+                theme::with_alpha(color, (base + 0.6 * energy) * opacity),
             ),
         ));
 
@@ -228,6 +242,10 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
                     ),
                 ));
             }
+        }
+
+        if fast {
+            continue;
         }
 
         // The ball, and the positions it had a few frames ago (from the phase).

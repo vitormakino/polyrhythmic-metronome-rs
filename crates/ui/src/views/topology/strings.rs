@@ -208,7 +208,8 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
         // The marks, the lit one swelling with the ringing.
         let spacing = track.width() / beats as f32;
         let idle = MARK.min(spacing * 0.4).min(row * 0.3).max(0.5);
-        let lit_beat = pulse.hit.map(|h| h.beat);
+        // Only while it rings: a faded hit's beat gets its idle mark back.
+        let lit_beat = pulse.hit.filter(|_| decay > VISIBLE).map(|h| h.beat);
         if spacing >= MIN_MARK_SPACING {
             for b in 0..beats {
                 if Some(b) != lit_beat {
@@ -226,7 +227,7 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
                 t.dot_inactive.gamma_multiply(opacity),
             );
         }
-        if let Some(b) = lit_beat.filter(|_| decay > VISIBLE) {
+        if let Some(b) = lit_beat {
             let at = pos2(x_of(b as f32 / beats as f32), y);
             let r = (idle + (1.5 + 3.0 * decay)).min(row * 0.45).max(idle);
             theme::paint_glow(painter, at, r * 2.6, color, 0.7 * decay);

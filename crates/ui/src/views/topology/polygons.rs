@@ -218,9 +218,10 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
 
         // The runner's trail: where it was a few frames ago, from the phase,
         // at most one beat's travel so it never wraps around the polygon.
+        // A single beat's runner never moves: no trail.
         let phase = pulse.phase.filter(|_| frame.playing);
         let runner_r = (idle * 1.5).clamp(2.5, 5.0);
-        if let Some(phase) = phase {
+        if let Some(phase) = phase.filter(|_| beats > 1) {
             let beat_secs = measure_secs / f64::from(beats);
             let one_beat = beat_secs / f64::from(style.trail_step);
             let steps =
@@ -277,11 +278,11 @@ mod tests {
     use crate::views::topology::PulseView;
     use egui::Color32;
 
-    fn view(phase: Option<f64>, hit: Option<Hit>) -> PulseView {
+    fn view(beats: u32, phase: Option<f64>, hit: Option<Hit>) -> PulseView {
         PulseView {
             id: pm_core::Pattern::default().pulses[0].id,
             color: Color32::LIGHT_BLUE,
-            beats: 4,
+            beats,
             enabled: true,
             phase,
             hit,
@@ -290,11 +291,16 @@ mod tests {
         }
     }
 
-    /// Shapes painted for one pulse of `phase`/`hit` with `playing`.
+    /// Shapes painted for one 4-beat pulse of `phase`/`hit` with `playing`.
     fn shapes(phase: Option<f64>, hit: Option<Hit>, playing: bool) -> usize {
+        shapes_of(4, phase, hit, playing)
+    }
+
+    /// Shapes painted for one pulse of `beats`, `phase`/`hit` with `playing`.
+    fn shapes_of(beats: u32, phase: Option<f64>, hit: Option<Hit>, playing: bool) -> usize {
         let theme = Theme::builtin("default").unwrap();
         let frame = TopologyFrame {
-            pulses: vec![view(phase, hit)],
+            pulses: vec![view(beats, phase, hit)],
             measure_phase: phase,
             measure_secs: 2.0,
             measure_count: 0,
@@ -331,6 +337,15 @@ mod tests {
         assert!(
             shapes(Some(2.6), None, true) > fresh,
             "playing draws a trail"
+        );
+    }
+
+    #[test]
+    fn one_beat_runner_has_no_trail() {
+        // The runner of a single beat never leaves its point: no trail.
+        assert_eq!(
+            shapes_of(1, Some(0.6), None, true),
+            shapes_of(1, Some(0.6), None, false)
         );
     }
 }

@@ -16,7 +16,7 @@ use egui::{Align2, Color32, Rect, Response, Role, Sense, Ui, WidgetInfo, pos2, v
 use pm_core::PulseId;
 use serde::{Deserialize, Serialize};
 
-pub use arcs::{ArcsStyle, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius};
+pub use arcs::{ArcsStyle, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius, arcs_too_fast};
 pub use circle::{CircleStyle, RingGeom, dot_radius, polygon_visible, ring_gap, ring_layout};
 pub use orbits::{OrbitsStyle, orbits_angle, orbits_ball, orbits_is_ring};
 pub use polygons::{PolygonsStyle, polygons_runner, polygons_vertex};
