@@ -268,7 +268,7 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
         for i in 0..beats {
             let v = pulse
                 .hit
-                .map_or(0.0, |h| dot_level(&style, h.beat, h.age, i, beats));
+                .map_or(0.0, |h| dot_level(&style, h.beat, pulse.prev, h.age, i));
             let at = point(i);
             let radius = idle + (lit - idle) * v;
             let fill = t.dot_inactive.lerp_to_gamma(color, v.clamp(0.0, 1.0));
@@ -309,17 +309,35 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
     }
 }
 
-/// How lit dot `beat` of a `beats`-beat ring is, `age` seconds after
-/// `lit_beat` was hit: the hit beat rises as `1 - exp(-age / rise)`, the one
-/// before it fades as `exp(-age / fall)`, the rest stay idle.
-fn dot_level(style: &CircleStyle, lit_beat: u32, age: f32, beat: u32, beats: u32) -> f32 {
+/// How lit dot `beat` is, `age` seconds after `lit_beat` was hit: the hit
+/// beat rises as `1 - exp(-age / rise)`, the one lit before it (`prev`, if
+/// any) fades as `exp(-age / fall)`, the rest stay idle.
+fn dot_level(style: &CircleStyle, lit_beat: u32, prev: Option<u32>, age: f32, beat: u32) -> f32 {
     let age = age.max(0.0);
-    let prev = (lit_beat + beats - 1) % beats;
     if beat == lit_beat {
         1.0 - (-age / style.dot_rise_tau).exp()
-    } else if beat == prev {
+    } else if prev == Some(beat) {
         (-age / style.dot_fall_tau).exp()
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_hit_lights_no_other_dot() {
+        let style = CircleStyle::DEFAULT;
+        for age in [0.0, 0.02, 0.05] {
+            for beat in 1..4 {
+                assert_eq!(dot_level(&style, 0, None, age, beat), 0.0);
+            }
+        }
+        assert!(dot_level(&style, 0, None, 0.05, 0) > 0.8);
+        // Only the beat really lit before fades, not the neighbour.
+        assert!(dot_level(&style, 3, Some(1), 0.01, 1) > 0.8);
+        assert_eq!(dot_level(&style, 3, Some(1), 0.01, 2), 0.0);
     }
 }

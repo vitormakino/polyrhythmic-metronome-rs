@@ -606,3 +606,21 @@ fn topology_circle_coincidence_light() {
         Duration::from_millis(50),
     );
 }
+
+#[test]
+fn first_hit_after_play_has_no_prev() {
+    let mut state = playing(&[4, 3]);
+    hit(&mut state, &[(0, 0, 100)]);
+    let frame = topo::frame(&state);
+    assert_eq!(frame.pulses[0].prev, None, "nothing lit before Play");
+    assert_eq!(frame.pulses[1].prev, None, "no hit, no prev");
+    // A muted stretch skips beats: prev is the beat really lit, not beat - 1.
+    hit(&mut state, &[(0, 1, 200)]);
+    hit(&mut state, &[(0, 3, 400)]);
+    assert_eq!(topo::frame(&state).pulses[0].prev, Some(1));
+    // A prev the pulse no longer has is dropped.
+    let id = ids(&state)[0];
+    hit(&mut state, &[(0, 0, 500)]);
+    state.pattern.set_beats(id, 2);
+    assert_eq!(topo::frame(&state).pulses[0].prev, None);
+}

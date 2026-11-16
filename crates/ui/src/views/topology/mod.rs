@@ -82,6 +82,7 @@ pub fn shape(kind: TopologyKind, _state: &UiState) -> Shape {
 /// One pulse as every design sees it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PulseView {
+    /// The pulse this view shows.
     pub id: PulseId,
     /// The theme's color for the pulse.
     pub color: Color32,
@@ -96,6 +97,10 @@ pub struct PulseView {
     /// The last hit, only while playing and enabled, and only on a beat the
     /// pulse still has.
     pub hit: Option<Hit>,
+    /// The beat lit before `hit`, still fading out ([`UiState::prev_beat`]);
+    /// `None` without a hit, for the first hit after Play, or when that beat
+    /// no longer exists.
+    pub prev: Option<u32>,
     /// Seed for the hit's random-looking effects ([`UiState::seed`]); 0 without a hit.
     pub seed: u64,
 }
@@ -128,6 +133,9 @@ pub fn frame(state: &UiState) -> TopologyFrame<'_> {
             let hit = state
                 .hit(p.id)
                 .filter(|h| state.playing && enabled && h.beat < beats);
+            let prev = hit
+                .and_then(|_| state.prev_beat(p.id))
+                .filter(|&b| b < beats);
             PulseView {
                 id: p.id,
                 color: t.pulse_color(p.color),
@@ -135,6 +143,7 @@ pub fn frame(state: &UiState) -> TopologyFrame<'_> {
                 enabled,
                 phase: state.pulse_phase(i),
                 hit,
+                prev,
                 seed: hit.map_or(0, |h| UiState::seed(p.id, h.frame)),
             }
         })

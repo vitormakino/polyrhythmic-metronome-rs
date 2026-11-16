@@ -305,6 +305,12 @@ impl UiState {
         self.lit.get(&pulse).map(|l| l.hit)
     }
 
+    /// The beat `pulse` lit before its last hit, still fading out; `None`
+    /// for the first hit after Play or a reset.
+    pub fn prev_beat(&self, pulse: PulseId) -> Option<u32> {
+        self.lit.get(&pulse).and_then(|l| l.prev)
+    }
+
     /// A stable seed for the effects of one hit, from the pulse and the audio
     /// frame. A pure hash (FNV-1a), no RNG: equal inputs always give equal seeds.
     pub fn seed(pulse: PulseId, frame: u64) -> u64 {
