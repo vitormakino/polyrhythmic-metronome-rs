@@ -14,6 +14,7 @@ use pm_core::session::{PulseMask, SessionProgress};
 use pm_core::{Bpm, Pattern, PulseId, TapTempo};
 use serde::{Deserialize, Serialize};
 
+use crate::clock::MeasureClock;
 use crate::i18n::Messages;
 use crate::spring::Spring;
 use crate::theme::{DARK, Theme};
@@ -90,6 +91,16 @@ pub struct UiState {
     /// Per pulse, one spring per beat: 0 idle, 1 lit. Drives the topology dots.
     dots: HashMap<PulseId, Vec<Spring>>,
     settings_open: HashSet<PulseId>,
+    /// Continuous measure position, fed by every beat event while playing.
+    clock: MeasureClock,
+    /// `playing` as of the last `advance`, to catch the Play and Stop edges.
+    was_playing: bool,
+    /// The measure length last given to the clock, in seconds.
+    measure_secs: Option<f64>,
+    /// Measure phase at the last `advance`.
+    measure_phase: Option<f64>,
+    /// The `now` of the last `advance`.
+    now: Instant,
     /// While a pulse card is dragged by its handle: (from, current target) indices.
     pub(crate) dragging: Option<(usize, usize)>,
     /// Every text the views show. Assigning a new value switches the language;
@@ -134,6 +145,11 @@ impl Default for UiState {
             lit: HashMap::new(),
             dots: HashMap::new(),
             settings_open: HashSet::new(),
+            clock: MeasureClock::default(),
+            was_playing: false,
+            measure_secs: None,
+            measure_phase: None,
+            now: Instant::now(),
             dragging: None,
             messages: Arc::new(Messages::english()),
             theme: Arc::new(DARK),
@@ -158,6 +174,10 @@ impl UiState {
         if !self.playing {
             return;
         }
+        // Muted hits still say where the measure is, lit or not.
+        if let Some(pulse) = self.pattern.pulse(ev.pulse) {
+            self.clock.anchor(ev.at, ev.beat, pulse.beats);
+        }
         if ev.muted
             && !self
                 .shown_session()
@@ -175,6 +195,25 @@ impl UiState {
     /// steps the flash springs by `dt` seconds.
     pub fn advance(&mut self, now: Instant, dt: f32) {
         let offset = self.visual_offset;
+        self.now = now;
+        let shown_at = now.checked_sub(offset).unwrap_or(now);
+        if self.playing != self.was_playing {
+            if self.playing {
+                self.clock.start(shown_at);
+            } else {
+                self.clock.stop();
+            }
+            self.was_playing = self.playing;
+        }
+        let reference = self.pattern.reference_beats();
+        if reference > 0 {
+            let secs = f64::from(reference) * 60.0 / f64::from(self.shown_bpm().get());
+            if self.measure_secs != Some(secs) {
+                self.clock.set_measure(shown_at, secs);
+                self.measure_secs = Some(secs);
+            }
+        }
+        self.measure_phase = self.clock.phase(shown_at);
         let mut due = Vec::new();
         self.pending.retain(|ev| {
             if now >= ev.at + offset {
@@ -217,6 +256,24 @@ impl UiState {
                 spring.step(dt);
             }
         }
+    }
+
+    /// Where the measure is, in `[0, 1)`, at the shown time of the last
+    /// [`Self::advance`]. `None` while stopped.
+    pub fn measure_phase(&self) -> Option<f64> {
+        self.measure_phase
+    }
+
+    /// Position of the pulse at `index` in its own cycle: the integer part is
+    /// its beat index, the fraction the progress to the next beat.
+    pub fn pulse_phase(&self, index: usize) -> Option<f64> {
+        let beats = self.pattern.pulses.get(index)?.beats;
+        self.measure_phase.map(|p| p * f64::from(beats))
+    }
+
+    /// The `now` of the last [`Self::advance`].
+    pub fn now(&self) -> Instant {
+        self.now
     }
 
     /// The beat of `pulse` that is lit now, if any.

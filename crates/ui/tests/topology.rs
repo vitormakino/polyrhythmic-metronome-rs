@@ -330,3 +330,44 @@ fn topology_many() {
         ],
     );
 }
+
+/// One event for pulse `index` at `at`.
+fn event(state: &UiState, index: usize, beat: u32, at: Instant, muted: bool) -> BeatEvent {
+    BeatEvent {
+        pulse: ids(state)[index],
+        beat,
+        frame: 0,
+        at,
+        muted,
+    }
+}
+
+#[test]
+fn phase_uses_visual_offset() {
+    let mut state = playing(&[4]);
+    state.visual_offset = Duration::from_millis(100);
+    let at = Instant::now();
+    // Play starts the clock at the shown time, `at`.
+    state.advance(at + Duration::from_millis(100), 0.0);
+    state.on_beat(&event(&state, 0, 0, at, false));
+    state.advance(at + Duration::from_millis(100), 0.0);
+    let phase = state.measure_phase().expect("playing");
+    assert!(phase.abs() < 1e-6, "{phase}");
+    assert_eq!(state.pulse_phase(0).map(|p| p.floor()), Some(0.0));
+}
+
+#[test]
+fn muted_events_still_anchor() {
+    let mut state = playing(&[4]);
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    // 120 BPM, 4 beats: a 2 s measure. Provisionally the clock reads 0.5
+    // at +1 s; the muted beat 0 sounding there is far off and snaps it.
+    let beat_at = at + Duration::from_secs(1);
+    state.on_beat(&event(&state, 0, 0, beat_at, true));
+    state.advance(beat_at, 0.0);
+    let phase = state.measure_phase().expect("playing");
+    assert!(phase.abs() < 1e-6, "{phase}");
+    assert_eq!(state.active_beat(ids(&state)[0]), None);
+    assert_eq!(state.pending_beats(), 0);
+}
