@@ -80,11 +80,20 @@ pub fn arcs_radius(index: usize, count: usize, half: f32) -> f32 {
 /// Where a ball on the arc of radius `r` over `center` (a point of the
 /// baseline) is at pulse phase `pulse_phase` (`k + u`: beat `k`, fraction `u`).
 /// An even beat crosses left to right, an odd one back, so it is on the
-/// baseline exactly at every integer phase and on the left at phase 0.
+/// baseline exactly at every integer phase (on the left at phase 0 of an
+/// even measure start).
 pub fn arcs_ball(center: Pos2, r: f32, pulse_phase: f64) -> Pos2 {
+    arcs_ball_at(center, r, pulse_phase, 0)
+}
+
+/// [`arcs_ball`] on the beat numbered `offset` more than the phase's own:
+/// only its parity matters, and it decides the direction. Passing
+/// `measure_count * beats` makes direction alternate across measures too, so
+/// an odd pulse does not jump at the wrap.
+pub fn arcs_ball_at(center: Pos2, r: f32, pulse_phase: f64, offset: u64) -> Pos2 {
     let k = pulse_phase.floor();
     let u = (pulse_phase - k) as f32;
-    let s = if (k as i64).rem_euclid(2) == 0 {
+    let s = if (k as u64 + offset).is_multiple_of(2) {
         u
     } else {
         1.0 - u
@@ -150,6 +159,7 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
     let count = pulses.len();
     let steps = (style.trail as f32 * budget).round() as usize;
     let measure_secs = frame.measure_secs.max(1e-3);
+    let measures = frame.measure_count;
     let mut balls = Vec::with_capacity(count);
     let mut strongest = (0.0f32, 0.0f32);
     for (index, pulse) in pulses.iter().enumerate() {
@@ -208,16 +218,23 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
             let cycle = f64::from(pulse.beats);
             for j in (1..=steps).rev() {
                 let back = rate * f64::from(style.trail_step) * j as f64;
-                let past = (phase - back).rem_euclid(cycle);
+                let raw = phase - back;
+                let past = raw.rem_euclid(cycle);
+                let measure = measures.saturating_sub(u64::from(raw < 0.0));
                 let fade = 1.0 - j as f32 / (steps as f32 + 1.0);
                 painter.circle_filled(
-                    arcs_ball(center, r, past),
+                    arcs_ball_at(center, r, past, measure * u64::from(pulse.beats)),
                     ball_r * (0.5 + 0.5 * fade),
                     theme::with_alpha(color, 0.45 * fade * opacity),
                 );
             }
         }
-        balls.push((arcs_ball(center, r, phase), color, energy, opacity));
+        balls.push((
+            arcs_ball_at(center, r, phase, measures * u64::from(pulse.beats)),
+            color,
+            energy,
+            opacity,
+        ));
     }
 
     // The baseline, vibrating on any hit.

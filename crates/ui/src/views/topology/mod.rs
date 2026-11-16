@@ -13,7 +13,7 @@ use egui::{Align2, Color32, Rect, Response, Role, Sense, Ui, WidgetInfo, pos2, v
 use pm_core::PulseId;
 use serde::{Deserialize, Serialize};
 
-pub use arcs::{ArcsStyle, arcs_ball, arcs_radius};
+pub use arcs::{ArcsStyle, arcs_ball, arcs_ball_at, arcs_radius};
 pub use circle::{CircleStyle, RingGeom, dot_radius, polygon_visible, ring_gap, ring_layout};
 pub use strings::{StringsStyle, cursor_x, displacement};
 
@@ -117,6 +117,9 @@ pub struct TopologyFrame<'a> {
     /// Length of the measure, seconds (pulse 0's beats at the shown tempo):
     /// what turns phase steps into time.
     pub measure_secs: f64,
+    /// Whole measures since Play ([`UiState::measure_count`]): keeps motion
+    /// that alternates direction continuous across the measure wrap.
+    pub measure_count: u64,
     /// Seconds since the coincidence, while one shows.
     pub coincidence_age: Option<f32>,
     /// The transport is running.
@@ -159,6 +162,7 @@ pub fn frame(state: &UiState) -> TopologyFrame<'_> {
         measure_phase: state.measure_phase(),
         measure_secs: f64::from(state.pattern.reference_beats().max(1)) * 60.0
             / f64::from(state.shown_bpm().get()),
+        measure_count: state.measure_count(),
         coincidence_age: state.coincidence_age(),
         playing: state.playing,
         theme: t,

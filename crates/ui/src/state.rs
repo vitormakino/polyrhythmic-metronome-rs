@@ -121,6 +121,8 @@ pub struct UiState {
     measure_secs: Option<f64>,
     /// Measure phase at the last `advance`.
     measure_phase: Option<f64>,
+    /// Whole measures since Play: 0 at the start, +1 at every wrap of `measure_phase`.
+    measure_count: u64,
     /// The `now` of the last `advance`.
     now: Instant,
     /// While a pulse card is dragged by its handle: (from, current target) indices.
@@ -172,6 +174,7 @@ impl Default for UiState {
             was_playing: false,
             measure_secs: None,
             measure_phase: None,
+            measure_count: 0,
             now: Instant::now(),
             dragging: None,
             messages: Arc::new(Messages::english()),
@@ -226,8 +229,10 @@ impl UiState {
         if self.playing != self.was_playing {
             if self.playing {
                 self.clock.start(shown_at);
+                self.measure_count = 0;
             } else {
                 self.clock.stop();
+                self.measure_count = 0;
             }
             self.was_playing = self.playing;
         }
@@ -239,7 +244,13 @@ impl UiState {
                 self.measure_secs = Some(secs);
             }
         }
-        self.measure_phase = self.clock.phase(shown_at);
+        let phase = self.clock.phase(shown_at);
+        if let (Some(before), Some(now)) = (self.measure_phase, phase)
+            && now < before - 0.5
+        {
+            self.measure_count += 1;
+        }
+        self.measure_phase = phase;
         let mut due = Vec::new();
         self.pending.retain(|ev| {
             if now >= ev.at + offset {
@@ -275,6 +286,12 @@ impl UiState {
                 lit.on = enabled;
             }
         }
+    }
+
+    /// Whole measures shown since Play (0 at the start, +1 at each wrap of
+    /// [`Self::measure_phase`]); 0 while stopped.
+    pub fn measure_count(&self) -> u64 {
+        self.measure_count
     }
 
     /// Where the measure is, in `[0, 1)`, at the shown time of the last
@@ -416,6 +433,7 @@ impl UiState {
         self.pending.clear();
         self.lit.clear();
         self.clock.reset();
+        self.measure_count = 0;
     }
 
     /// A tap at `now` (the TAP button, the global hotkey): pushes `Tap` and,

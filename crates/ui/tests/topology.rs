@@ -10,8 +10,8 @@ use pm_ui::i18n::Messages;
 use pm_ui::state::UiState;
 use pm_ui::theme::{self, Theme};
 use pm_ui::views::topology::{
-    self as topo, TopologyKind, arcs_ball, arcs_radius, cursor_x, displacement, ring_layout,
-    topology,
+    self as topo, TopologyKind, arcs_ball, arcs_ball_at, arcs_radius, cursor_x, displacement,
+    ring_layout, topology,
 };
 
 fn pattern_of(beats: &[u32]) -> Pattern {
@@ -875,4 +875,48 @@ fn topology_arcs_coincidence_light() {
         &[(0, 0, 100), (1, 0, 100), (2, 0, 100)],
         Duration::from_millis(50),
     );
+}
+
+#[test]
+fn arcs_odd_pulse_has_no_jump_at_wrap() {
+    let center = egui::pos2(0.0, 0.0);
+    let r = 100.0;
+    // 3 beats: the last beat of measure 0 is beat 2 (absolute), the first of measure 1 is absolute 3.
+    let before = arcs_ball_at(center, r, 2.999, 0);
+    let after = arcs_ball_at(center, r, 0.001, 3);
+    assert!((before - after).length() < 2.0, "{before:?} {after:?}");
+    // Two measures on, parity is back and still continuous.
+    let before = arcs_ball_at(center, r, 2.999, 3);
+    let after = arcs_ball_at(center, r, 0.001, 6);
+    assert!((before - after).length() < 2.0, "{before:?} {after:?}");
+}
+
+#[test]
+fn arcs_all_on_baseline_at_beat_one() {
+    let center = egui::pos2(10.0, 40.0);
+    for beats in [1u64, 2, 3, 4, 5, 7] {
+        for measure in 0..4 {
+            let at = arcs_ball_at(center, 30.0, 0.0, measure * beats);
+            assert!((at.y - center.y).abs() < 1e-3, "{beats} {measure}: {at:?}");
+        }
+    }
+}
+
+#[test]
+fn measure_count_increments_on_wrap() {
+    let mut state = playing(&[3]);
+    assert_eq!(state.measure_count(), 0);
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    hit(&mut state, &[(0, 0, 1)]);
+    let measure = Duration::from_secs_f64(3.0 * 60.0 / f64::from(state.shown_bpm().get()));
+    let mut seen = state.measure_count();
+    for step in 1..=((measure.as_millis() as u32 * 25) / 10) {
+        state.advance(at + Duration::from_millis(u64::from(step) * 10), 0.01);
+        assert!(state.measure_count() >= seen);
+        seen = state.measure_count();
+    }
+    assert!(seen >= 2, "after 2.5 measures: {seen}");
+    state.clear_beats();
+    assert_eq!(state.measure_count(), 0);
 }
