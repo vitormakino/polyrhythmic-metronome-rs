@@ -1,16 +1,16 @@
-//! The mini window: a small always-on-top card with the animated topology,
-//! the tempo (buttons, scroll and drag on the number) and Play/Stop. No pulse
-//! editing; the expand button goes back to the full window. With a session
-//! selected, a thin stage bar sits in the gap above Play.
+//! The mini window: a small always-on-top card with the animated topology
+//! (always the circle), the tempo (buttons, scroll and drag on the number) and
+//! Play/Stop. No pulse editing; the expand button goes back to the full
+//! window. With a session selected, a thin stage bar sits in the gap above Play.
 
 use std::time::Instant;
 
-use egui::{Rect, Ui, UiBuilder, Vec2, pos2, vec2};
+use egui::{Rect, Ui, Vec2, pos2, vec2};
 
 use super::bpm_card::{bpm_gestures, bpm_stepper};
 use super::full::play_button;
 use super::session_strip::stage_bar;
-use super::topology::topology;
+use super::topology::{self, TopologyKind};
 use super::widgets;
 use crate::state::{UiAction, UiState, WindowMode};
 use crate::theme;
@@ -43,9 +43,8 @@ pub fn mini_view(ui: &mut Ui, state: &mut UiState, _now: Instant) -> Vec<UiActio
     let topo = Rect::from_min_max(inner.min, pos2(inner.right(), bpm.top() - GAP));
     let side = topo.width().min(topo.height()).max(1.0);
     let square = Rect::from_center_size(topo.center(), Vec2::splat(side));
-    ui.scope_builder(UiBuilder::new().max_rect(square), |ui| {
-        topology(ui, state, side);
-    });
+    // Always the circle, whatever the full window shows.
+    topology::paint(TopologyKind::Circle, ui, state, square);
 
     let number = bpm_stepper(
         ui,

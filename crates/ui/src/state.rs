@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::clock::MeasureClock;
 use crate::i18n::Messages;
 use crate::theme::{DARK, Theme};
+use crate::views::topology::TopologyKind;
 
 /// A practice session the user can start: the name shown in the list and the
 /// plan it runs. The plan is shared and never mutated, so a session that is
@@ -147,6 +148,8 @@ pub struct UiState {
     pub show_mini_button: bool,
     /// Show the session strip in the full window (off where sessions are not offered).
     pub show_sessions: bool,
+    /// The drawing the full window shows (the mini always shows the circle).
+    pub topology: TopologyKind,
 }
 
 impl Default for UiState {
@@ -180,6 +183,7 @@ impl Default for UiState {
             running_plan: None,
             show_mini_button: true,
             show_sessions: true,
+            topology: TopologyKind::Circle,
         }
     }
 }

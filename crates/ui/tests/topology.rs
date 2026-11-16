@@ -8,8 +8,8 @@ use pm_audio::BeatEvent;
 use pm_core::{Pattern, PulseId};
 use pm_ui::i18n::Messages;
 use pm_ui::state::UiState;
-use pm_ui::theme;
-use pm_ui::views::topology::{ring_layout, topology};
+use pm_ui::theme::{self, Theme};
+use pm_ui::views::topology::{self as topo, TopologyKind, ring_layout, topology};
 
 fn pattern_of(beats: &[u32]) -> Pattern {
     let mut pattern = Pattern::default();
@@ -409,4 +409,200 @@ fn clear_beats_resets_clock() {
     state.advance(next, 0.0);
     let phase = state.measure_phase().expect("playing");
     assert!((phase - 0.25).abs() < 1e-6, "{phase}");
+}
+
+#[test]
+fn kind_round_trips_snake_case() {
+    #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+    struct Doc {
+        topology: TopologyKind,
+    }
+    let names = [
+        "circle", "strings", "arcs", "orbits", "sweep", "polygons", "hidden",
+    ];
+    for (kind, name) in TopologyKind::ALL.into_iter().zip(names) {
+        let text = toml::to_string(&Doc { topology: kind }).unwrap();
+        assert_eq!(text.trim(), format!("topology = \"{name}\""));
+        assert_eq!(
+            toml::from_str::<Doc>(&text).unwrap(),
+            Doc { topology: kind }
+        );
+    }
+    assert_eq!(TopologyKind::default(), TopologyKind::Circle);
+    assert_eq!(UiState::default().topology, TopologyKind::Circle);
+}
+
+#[test]
+fn all_lists_seven_in_order() {
+    use TopologyKind::*;
+    assert_eq!(
+        TopologyKind::ALL,
+        [Circle, Strings, Arcs, Orbits, Sweep, Polygons, Hidden]
+    );
+}
+
+#[test]
+fn shapes_per_kind() {
+    use topo::Shape;
+    let state = UiState::default();
+    for kind in [
+        TopologyKind::Circle,
+        TopologyKind::Orbits,
+        TopologyKind::Sweep,
+        TopologyKind::Polygons,
+    ] {
+        assert_eq!(topo::shape(kind, &state), Shape::Square);
+    }
+    assert_eq!(topo::shape(TopologyKind::Arcs, &state), Shape::Aspect(2.0));
+    assert_eq!(topo::shape(TopologyKind::Hidden, &state), Shape::Hidden);
+}
+
+#[test]
+fn disabled_pulse_moves_without_hit() {
+    let mut state = playing(&[4, 3]);
+    let second = ids(&state)[1];
+    state.pattern.set_enabled(second, false);
+    hit(&mut state, &[(0, 1, 100), (1, 1, 100)]);
+    let frame = topo::frame(&state);
+    assert!(frame.playing);
+    assert_eq!(frame.pulses.len(), 2);
+    assert!(frame.pulses[0].hit.is_some());
+    assert!(frame.pulses[0].enabled);
+    let off = &frame.pulses[1];
+    assert!(!off.enabled);
+    assert!(off.phase.is_some(), "a disabled pulse keeps moving");
+    assert_eq!(off.hit, None, "a disabled pulse fires no effects");
+    assert_eq!(frame.pulses[0].seed, UiState::seed(ids(&state)[0], 100));
+}
+
+/// One pass of `paint` over `state` in a `size` square; the shapes it made.
+fn paint_once(ctx: &egui::Context, state: &UiState, kind: TopologyKind, size: f32) -> usize {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            Vec2::splat(size + 16.0),
+        )),
+        ..Default::default()
+    };
+    let output = ctx.run_ui(input, |ui| {
+        let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::splat(size));
+        topo::paint(kind, ui, state, rect);
+    });
+    let count = output.shapes.len();
+    output.drop_without_applying_deltas();
+    count
+}
+
+/// Hits every pulse at `at` on a non-zero beat and shows them `age` later.
+fn hit_all_at(state: &mut UiState, beat: u32, at: Instant, age: Duration) {
+    state.advance(at, 0.0);
+    for (i, id) in ids(state).into_iter().enumerate() {
+        state.on_beat(&BeatEvent {
+            pulse: id,
+            beat,
+            frame: 1000 + i as u64,
+            at,
+            muted: false,
+        });
+    }
+    state.advance(at + age, 0.0);
+}
+
+#[test]
+fn paint_survives_pattern_edits_mid_flash() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[4, 3, 5]);
+    hit_all_at(&mut state, 2, Instant::now(), Duration::from_millis(30));
+    paint_once(&ctx, &state, TopologyKind::Circle, 300.0);
+    let first = ids(&state)[0];
+    state.pattern.remove(first);
+    paint_once(&ctx, &state, TopologyKind::Circle, 300.0);
+    // The new reference pulse has fewer beats than the lit one.
+    let next = ids(&state)[0];
+    state.pattern.set_beats(next, 1);
+    paint_once(&ctx, &state, TopologyKind::Circle, 300.0);
+    state.advance(state.now() + Duration::from_millis(16), 0.016);
+    paint_once(&ctx, &state, TopologyKind::Circle, 300.0);
+}
+
+#[test]
+fn circle_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Circle, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+#[test]
+fn hidden_paints_nothing() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let state = playing(&[4, 3]);
+    assert_eq!(paint_once(&ctx, &state, TopologyKind::Hidden, 300.0), 0);
+}
+
+/// `state` lit `age` after its hits at a fixed instant, without settling:
+/// the young effects show.
+fn young_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
+    let Some(renderer) = renderer() else {
+        eprintln!("SKIPPED {name}: no wgpu adapter available");
+        return;
+    };
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    let ids = ids(&state);
+    for &(i, beat, frame) in hits {
+        state.on_beat(&BeatEvent {
+            pulse: ids[i],
+            beat,
+            frame,
+            at,
+            muted: false,
+        });
+    }
+    state.advance(at + age, 0.0);
+    let size = 360.0;
+    let mut h = Harness::builder()
+        .with_size(Vec2::splat(size + 16.0))
+        .with_context_setup(theme::install)
+        .renderer(renderer)
+        .build_ui_state(
+            move |ui, state: &mut UiState| {
+                let card = state.theme.card;
+                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
+                topology(ui, state, size);
+            },
+            state,
+        );
+    h.run();
+    h.snapshot_options(
+        name,
+        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
+    );
+}
+
+#[test]
+fn topology_circle_hit_dark() {
+    young_snapshot(
+        "topology_circle_hit_dark",
+        pt_br(playing(&[3, 4, 5])),
+        &[(0, 1, 100), (1, 1, 100), (2, 2, 100)],
+        Duration::from_millis(50),
+    );
+}
+
+#[test]
+fn topology_circle_coincidence_light() {
+    let mut state = pt_br(playing(&[3, 4, 5]));
+    state.theme = Arc::new(Theme::builtin("light").unwrap());
+    young_snapshot(
+        "topology_circle_coincidence_light",
+        state,
+        &[(0, 0, 100), (1, 0, 100), (2, 0, 100)],
+        Duration::from_millis(50),
+    );
 }
