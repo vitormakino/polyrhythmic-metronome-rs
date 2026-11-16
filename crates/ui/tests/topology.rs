@@ -10,8 +10,8 @@ use pm_ui::i18n::Messages;
 use pm_ui::state::UiState;
 use pm_ui::theme::{self, Theme};
 use pm_ui::views::topology::{
-    self as topo, TopologyKind, arcs_ball, arcs_ball_at, arcs_radius, cursor_x, displacement,
-    ring_layout, topology,
+    self as topo, TopologyKind, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius, cursor_x,
+    displacement, ring_layout, topology,
 };
 
 fn pattern_of(beats: &[u32]) -> Pattern {
@@ -919,4 +919,20 @@ fn measure_count_increments_on_wrap() {
     assert!(seen >= 2, "after 2.5 measures: {seen}");
     state.clear_beats();
     assert_eq!(state.measure_count(), 0);
+}
+
+#[test]
+fn arcs_ripple_is_where_the_ball_touched() {
+    let center = egui::pos2(50.0, 40.0);
+    let r = 30.0;
+    // 3 beats, measure 1, beat 0 (absolute 3, odd): the ball touches on the right.
+    let at = arcs_contact(center, r, 0, 3, 1, Some(0.05));
+    let ball = arcs_ball_at(center, r, 0.0, 3);
+    assert!((at.x - ball.x).abs() < 1e-3 && at.x > center.x, "{at:?}");
+    // Measure 0, beat 0: on the left.
+    assert!(arcs_contact(center, r, 0, 3, 0, Some(0.05)).x < center.x);
+    // Hit on beat 2 of measure 1, shown just after the wrap (phase 0.02 of
+    // measure 2): that beat was absolute 5, odd: the right side.
+    let at = arcs_contact(center, r, 2, 3, 2, Some(0.02));
+    assert!(at.x > center.x, "{at:?}");
 }

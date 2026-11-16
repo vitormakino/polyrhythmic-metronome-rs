@@ -102,6 +102,26 @@ pub fn arcs_ball_at(center: Pos2, r: f32, pulse_phase: f64, offset: u64) -> Pos2
     pos2(center.x + r * angle.cos(), center.y + r * angle.sin())
 }
 
+/// Where the ball touched the baseline on beat `beat` of a pulse of `beats`
+/// beats, now at `phase` in measure `measures`. A hit on a beat past the
+/// current one happened before the measure wrapped, in the measure before.
+pub fn arcs_contact(
+    center: Pos2,
+    r: f32,
+    beat: u32,
+    beats: u32,
+    measures: u64,
+    phase: Option<f64>,
+) -> Pos2 {
+    let current = phase.map_or(0, |p| p.floor() as u32);
+    let measure = if beat > current {
+        measures.saturating_sub(1)
+    } else {
+        measures
+    };
+    arcs_ball_at(center, r, f64::from(beat), measure * u64::from(beats))
+}
+
 /// The points of the half circle of radius `r` over `center`, left to right.
 fn arc_points(center: Pos2, r: f32, segments: usize) -> Vec<Pos2> {
     (0..=segments)
@@ -198,8 +218,7 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
         if let (Some(h), true) = (pulse.hit, pulse.enabled) {
             let u = h.age / style.ripple_secs;
             if (0.0..1.0).contains(&u) {
-                let side = if h.beat % 2 == 0 { -r } else { r };
-                let at = pos2(center.x + side, center.y);
+                let at = arcs_contact(center, r, h.beat, pulse.beats, measures, pulse.phase);
                 let reach = (4.0 + style.ripple_reach * u) * scale.max(0.5);
                 painter.add(Shape::line(
                     arc_points(at, reach, 24),

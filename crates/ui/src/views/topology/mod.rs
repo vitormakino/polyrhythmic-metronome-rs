@@ -13,7 +13,7 @@ use egui::{Align2, Color32, Rect, Response, Role, Sense, Ui, WidgetInfo, pos2, v
 use pm_core::PulseId;
 use serde::{Deserialize, Serialize};
 
-pub use arcs::{ArcsStyle, arcs_ball, arcs_ball_at, arcs_radius};
+pub use arcs::{ArcsStyle, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius};
 pub use circle::{CircleStyle, RingGeom, dot_radius, polygon_visible, ring_gap, ring_layout};
 pub use strings::{StringsStyle, cursor_x, displacement};
 
