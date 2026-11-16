@@ -87,6 +87,12 @@ pub fn polygons_runner(center: Pos2, r: f32, beats: u32, pulse_phase: f64) -> Po
     a.lerp(b, u)
 }
 
+/// Where a pulse's runner is drawn: at `phase` while `playing`, on vertex 0
+/// otherwise (the phase can be stale until the next advance after Stop).
+pub fn polygons_pose(center: Pos2, r: f32, beats: u32, phase: Option<f64>, playing: bool) -> Pos2 {
+    polygons_runner(center, r, beats, phase.filter(|_| playing).unwrap_or(0.0))
+}
+
 /// Whether the polygon of `beats` vertices is drawn with edges: a line or
 /// more, up to 24 vertices.
 fn edges_visible(beats: u32) -> bool {
@@ -236,7 +242,7 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
             }
         }
         runners.push((
-            polygons_runner(center, r, beats, phase.unwrap_or(0.0)),
+            polygons_pose(center, r, beats, phase, frame.playing),
             runner_r,
             opacity,
         ));
@@ -260,5 +266,71 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
             theme::paint_glow(painter, at, radius * 3.0, t.strong, 0.45 * fx::FX_STRENGTH);
         }
         painter.circle_filled(at, radius, t.strong.gamma_multiply(opacity));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Hit;
+    use crate::theme::Theme;
+    use crate::views::topology::PulseView;
+    use egui::Color32;
+
+    fn view(phase: Option<f64>, hit: Option<Hit>) -> PulseView {
+        PulseView {
+            id: pm_core::Pattern::default().pulses[0].id,
+            color: Color32::LIGHT_BLUE,
+            beats: 4,
+            enabled: true,
+            phase,
+            hit,
+            prev: None,
+            seed: 7,
+        }
+    }
+
+    /// Shapes painted for one pulse of `phase`/`hit` with `playing`.
+    fn shapes(phase: Option<f64>, hit: Option<Hit>, playing: bool) -> usize {
+        let theme = Theme::builtin("default").unwrap();
+        let frame = TopologyFrame {
+            pulses: vec![view(phase, hit)],
+            measure_phase: phase,
+            measure_secs: 2.0,
+            measure_count: 0,
+            coincidence_age: None,
+            playing,
+            theme: &theme,
+        };
+        let ctx = egui::Context::default();
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let area = Rect::from_min_size(Pos2::ZERO, egui::vec2(300.0, 300.0));
+            paint(&ui.painter().clone(), &frame, area);
+        });
+        let count = out.shapes.len();
+        out.drop_without_applying_deltas();
+        count
+    }
+
+    #[test]
+    fn stopped_runner_is_on_vertex_zero_even_with_a_stale_phase() {
+        let c = egui::pos2(100.0, 100.0);
+        let top = polygons_vertex(c, 50.0, 4, 0);
+        for phase in [None, Some(2.6)] {
+            let at = polygons_pose(c, 50.0, 4, phase, false);
+            assert!((at - top).length() < 1e-3, "{phase:?}");
+        }
+        let moving = polygons_pose(c, 50.0, 4, Some(2.6), true);
+        assert!((moving - top).length() > 1.0);
+    }
+
+    #[test]
+    fn stale_phase_while_stopped_adds_no_trail() {
+        let fresh = shapes(None, None, false);
+        assert_eq!(shapes(Some(2.6), None, false), fresh);
+        assert!(
+            shapes(Some(2.6), None, true) > fresh,
+            "playing draws a trail"
+        );
     }
 }
