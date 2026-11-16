@@ -14,6 +14,9 @@ use pm_ui::theme::{self, Theme};
 use pm_ui::views::full::full_view;
 use pm_ui::views::topology::TopologyKind;
 
+mod common;
+use common::play_to;
+
 const MIN: Vec2 = pm_ui::views::full::MIN_SIZE;
 const PHONE: Vec2 = Vec2::new(375.0, 640.0);
 const MEDIUM: Vec2 = Vec2::new(900.0, 700.0);
@@ -835,7 +838,7 @@ fn full_medium_hidden() {
     snapshot_topology("full_medium_hidden", MEDIUM, TopologyKind::Hidden);
 }
 
-/// Strings on the phone layout: three pulses, one hit still young.
+/// Strings on the phone layout: three pulses, just after a hit.
 #[test]
 fn full_375_strings() {
     let Some(renderer) = renderer() else {
@@ -844,18 +847,8 @@ fn full_375_strings() {
     };
     let mut state = pt_br(three_pulses(TopologyKind::Strings));
     state.theme = Arc::new(Theme::builtin("default").expect("theme exists"));
-    state.playing = true;
-    let at = Instant::now();
-    state.advance(at, 0.0);
-    let id = state.pattern.pulses[1].id;
-    state.on_beat(&BeatEvent {
-        pulse: id,
-        beat: 1,
-        frame: 100,
-        at,
-        muted: false,
-    });
-    state.advance(at + Duration::from_millis(30), 0.0);
+    // Just past pulse 2's beat 2.
+    play_to(&mut state, 1, 1, Duration::from_millis(30));
     let mut h = harness_with(PHONE, state, Some(renderer));
     h.remove_cursor();
     h.run();
@@ -865,7 +858,7 @@ fn full_375_strings() {
     );
 }
 
-/// Arcs on the phone layout: three pulses, one hit still young.
+/// Arcs on the phone layout: three pulses, just after a hit.
 #[test]
 fn full_375_arcs() {
     let Some(renderer) = renderer() else {
@@ -874,18 +867,8 @@ fn full_375_arcs() {
     };
     let mut state = pt_br(three_pulses(TopologyKind::Arcs));
     state.theme = Arc::new(Theme::builtin("default").expect("theme exists"));
-    state.playing = true;
-    let at = Instant::now();
-    state.advance(at, 0.0);
-    let id = state.pattern.pulses[1].id;
-    state.on_beat(&BeatEvent {
-        pulse: id,
-        beat: 1,
-        frame: 100,
-        at,
-        muted: false,
-    });
-    state.advance(at + Duration::from_millis(30), 0.0);
+    // Just past pulse 2's beat 2.
+    play_to(&mut state, 1, 1, Duration::from_millis(30));
     let mut h = harness_with(PHONE, state, Some(renderer));
     h.remove_cursor();
     h.run();

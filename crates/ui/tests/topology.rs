@@ -9,6 +9,8 @@ use pm_core::{Pattern, PulseId};
 use pm_ui::i18n::Messages;
 use pm_ui::state::UiState;
 use pm_ui::theme::{self, Theme};
+mod common;
+use common::play_to;
 use pm_ui::views::topology::{
     self as topo, TopologyKind, arcs_ball, arcs_ball_at, arcs_contact, arcs_radius, arcs_too_fast,
     cursor_x, displacement, orbits_angle, orbits_ball, orbits_is_ring, ring_layout, sweep_angle,
@@ -255,86 +257,6 @@ fn renderer() -> Option<WgpuTestRenderer> {
     result.ok()
 }
 
-fn snapshot(name: &str, mut state: UiState, size: f32, hits: &[(usize, u32, u64)]) {
-    let Some(renderer) = renderer() else {
-        eprintln!("SKIPPED {name}: no wgpu adapter available");
-        return;
-    };
-    hit(&mut state, hits);
-    settle(&mut state);
-    // Keep the hits lit but let the flash settle, like a steady frame.
-    let mut h = Harness::builder()
-        .with_size(Vec2::splat(size + 16.0))
-        .with_context_setup(theme::install)
-        .renderer(renderer)
-        .build_ui_state(
-            move |ui, state: &mut UiState| {
-                ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, theme::DARK.card);
-                topology(ui, state, size);
-            },
-            state,
-        );
-    h.run();
-    h.snapshot_options(
-        name,
-        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
-    );
-}
-
-#[test]
-fn topology_2() {
-    snapshot(
-        "topology_2",
-        pt_br(playing(&[4, 3])),
-        360.0,
-        &[(0, 0, 100), (1, 0, 100)],
-    );
-}
-
-#[test]
-fn topology_2_en() {
-    snapshot(
-        "topology_2_en",
-        playing(&[4, 3]),
-        360.0,
-        &[(0, 0, 100), (1, 0, 100)],
-    );
-}
-
-#[test]
-fn topology_6() {
-    snapshot(
-        "topology_6",
-        pt_br(playing(&[4, 3, 5, 7, 6, 8])),
-        360.0,
-        &[
-            (0, 1, 100),
-            (1, 2, 100),
-            (2, 3, 100),
-            (3, 5, 100),
-            (4, 0, 100),
-            (5, 7, 100),
-        ],
-    );
-}
-
-#[test]
-fn topology_many() {
-    snapshot(
-        "topology_many",
-        pt_br(playing(&[17, 23, 4, 5, 6, 32, 64, 12, 9, 3, 2, 1])),
-        360.0,
-        &[
-            (0, 5, 100),
-            (1, 0, 100),
-            (2, 1, 100),
-            (5, 31, 100),
-            (6, 40, 100),
-        ],
-    );
-}
-
 /// One event for pulse `index` at `at`.
 fn event(state: &UiState, index: usize, beat: u32, at: Instant, muted: bool) -> BeatEvent {
     BeatEvent {
@@ -549,68 +471,6 @@ fn hidden_paints_nothing() {
     assert_eq!(paint_once(&ctx, &state, TopologyKind::Hidden, 300.0), 0);
 }
 
-/// `state` lit `age` after its hits at a fixed instant, without settling:
-/// the young effects show.
-fn young_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
-    let Some(renderer) = renderer() else {
-        eprintln!("SKIPPED {name}: no wgpu adapter available");
-        return;
-    };
-    let at = Instant::now();
-    state.advance(at, 0.0);
-    let ids = ids(&state);
-    for &(i, beat, frame) in hits {
-        state.on_beat(&BeatEvent {
-            pulse: ids[i],
-            beat,
-            frame,
-            at,
-            muted: false,
-        });
-    }
-    state.advance(at + age, 0.0);
-    let size = 360.0;
-    let mut h = Harness::builder()
-        .with_size(Vec2::splat(size + 16.0))
-        .with_context_setup(theme::install)
-        .renderer(renderer)
-        .build_ui_state(
-            move |ui, state: &mut UiState| {
-                let card = state.theme.card;
-                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
-                topology(ui, state, size);
-            },
-            state,
-        );
-    h.run();
-    h.snapshot_options(
-        name,
-        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
-    );
-}
-
-#[test]
-fn topology_circle_hit_dark() {
-    young_snapshot(
-        "topology_circle_hit_dark",
-        pt_br(playing(&[3, 4, 5])),
-        &[(0, 1, 100), (1, 1, 100), (2, 2, 100)],
-        Duration::from_millis(50),
-    );
-}
-
-#[test]
-fn topology_circle_coincidence_light() {
-    let mut state = pt_br(playing(&[3, 4, 5]));
-    state.theme = Arc::new(Theme::builtin("light").unwrap());
-    young_snapshot(
-        "topology_circle_coincidence_light",
-        state,
-        &[(0, 0, 100), (1, 0, 100), (2, 0, 100)],
-        Duration::from_millis(50),
-    );
-}
-
 #[test]
 fn first_hit_after_play_has_no_prev() {
     let mut state = playing(&[4, 3]);
@@ -710,72 +570,6 @@ fn strings_old_hit_keeps_its_mark() {
     );
 }
 
-/// `state` lit `age` after its hits, painted as Strings in a card-sized low band.
-fn strings_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
-    let Some(renderer) = renderer() else {
-        eprintln!("SKIPPED {name}: no wgpu adapter available");
-        return;
-    };
-    state.topology = TopologyKind::Strings;
-    let at = Instant::now();
-    state.advance(at, 0.0);
-    let ids = ids(&state);
-    for &(i, beat, frame) in hits {
-        state.on_beat(&BeatEvent {
-            pulse: ids[i],
-            beat,
-            frame,
-            at,
-            muted: false,
-        });
-    }
-    state.advance(at + age, 0.0);
-    let topo::Shape::Low(height) = topo::shape(TopologyKind::Strings, &state) else {
-        panic!("strings are low");
-    };
-    let width = 360.0;
-    let mut h = Harness::builder()
-        .with_size(Vec2::new(width + 16.0, height + 16.0))
-        .with_context_setup(theme::install)
-        .renderer(renderer)
-        .build_ui_state(
-            move |ui, state: &mut UiState| {
-                let card = state.theme.card;
-                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
-                let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::new(width, height));
-                topo::paint(TopologyKind::Strings, ui, state, rect);
-            },
-            state,
-        );
-    h.run();
-    h.snapshot_options(
-        name,
-        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
-    );
-}
-
-#[test]
-fn topology_strings_hit_dark() {
-    strings_snapshot(
-        "topology_strings_hit_dark",
-        pt_br(playing(&[3, 4, 5])),
-        &[(0, 1, 100), (1, 2, 100), (2, 0, 100)],
-        Duration::from_millis(30),
-    );
-}
-
-#[test]
-fn topology_strings_many_light() {
-    let mut state = pt_br(playing(&[17, 23, 4, 5, 6, 32, 64, 12]));
-    state.theme = Arc::new(Theme::builtin("light").unwrap());
-    strings_snapshot(
-        "topology_strings_many_light",
-        state,
-        &[(0, 5, 100), (1, 11, 100), (5, 31, 100), (6, 40, 100)],
-        Duration::from_millis(30),
-    );
-}
-
 #[test]
 fn arcs_ball_on_baseline_at_each_beat() {
     let center = egui::pos2(100.0, 80.0);
@@ -830,69 +624,6 @@ fn arcs_shape_budget() {
     assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
     let shapes = paint_once(&ctx, &state, TopologyKind::Arcs, 360.0);
     assert!(shapes < 20_000, "{shapes} shapes");
-}
-
-/// `state` lit `age` after its hits, painted as Arcs in a card-sized 2:1 area.
-fn arcs_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
-    let Some(renderer) = renderer() else {
-        eprintln!("SKIPPED {name}: no wgpu adapter available");
-        return;
-    };
-    state.topology = TopologyKind::Arcs;
-    let at = Instant::now();
-    state.advance(at, 0.0);
-    let ids = ids(&state);
-    for &(i, beat, frame) in hits {
-        state.on_beat(&BeatEvent {
-            pulse: ids[i],
-            beat,
-            frame,
-            at,
-            muted: false,
-        });
-    }
-    state.advance(at + age, 0.0);
-    let (width, height) = (360.0, 180.0);
-    let mut h = Harness::builder()
-        .with_size(Vec2::new(width + 16.0, height + 16.0))
-        .with_context_setup(theme::install)
-        .renderer(renderer)
-        .build_ui_state(
-            move |ui, state: &mut UiState| {
-                let card = state.theme.card;
-                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
-                let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::new(width, height));
-                topo::paint(TopologyKind::Arcs, ui, state, rect);
-            },
-            state,
-        );
-    h.run();
-    h.snapshot_options(
-        name,
-        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
-    );
-}
-
-#[test]
-fn topology_arcs_hit_dark() {
-    arcs_snapshot(
-        "topology_arcs_hit_dark",
-        pt_br(playing(&[3, 4, 5])),
-        &[(0, 1, 100), (1, 2, 100), (2, 0, 100)],
-        Duration::from_millis(40),
-    );
-}
-
-#[test]
-fn topology_arcs_coincidence_light() {
-    let mut state = pt_br(playing(&[3, 4, 5]));
-    state.theme = Arc::new(Theme::builtin("light").unwrap());
-    arcs_snapshot(
-        "topology_arcs_coincidence_light",
-        state,
-        &[(0, 0, 100), (1, 0, 100), (2, 0, 100)],
-        Duration::from_millis(50),
-    );
 }
 
 #[test]
@@ -1078,69 +809,6 @@ fn orbits_shape_budget() {
     assert!(shapes < 20_000, "{shapes} shapes");
 }
 
-/// `state` lit `age` after its hits, painted as Orbits in a card-sized square.
-fn orbits_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
-    let Some(renderer) = renderer() else {
-        eprintln!("SKIPPED {name}: no wgpu adapter available");
-        return;
-    };
-    state.topology = TopologyKind::Orbits;
-    let at = Instant::now();
-    state.advance(at, 0.0);
-    let ids = ids(&state);
-    for &(i, beat, frame) in hits {
-        state.on_beat(&BeatEvent {
-            pulse: ids[i],
-            beat,
-            frame,
-            at,
-            muted: false,
-        });
-    }
-    state.advance(at + age, 0.0);
-    let size = 360.0;
-    let mut h = Harness::builder()
-        .with_size(Vec2::splat(size + 16.0))
-        .with_context_setup(theme::install)
-        .renderer(renderer)
-        .build_ui_state(
-            move |ui, state: &mut UiState| {
-                let card = state.theme.card;
-                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
-                let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::splat(size));
-                topo::paint(TopologyKind::Orbits, ui, state, rect);
-            },
-            state,
-        );
-    h.run();
-    h.snapshot_options(
-        name,
-        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
-    );
-}
-
-#[test]
-fn topology_orbits_hit_dark() {
-    orbits_snapshot(
-        "topology_orbits_hit_dark",
-        pt_br(playing(&[3, 4, 5])),
-        &[(0, 1, 100), (1, 2, 100), (2, 0, 100)],
-        Duration::from_millis(40),
-    );
-}
-
-#[test]
-fn topology_orbits_many_light() {
-    let mut state = pt_br(playing(&[3, 4, 5, 7, 8, 9, 11, 13]));
-    state.theme = Arc::new(Theme::builtin("light").unwrap());
-    orbits_snapshot(
-        "topology_orbits_many_light",
-        state,
-        &[(0, 1, 100), (2, 3, 100), (5, 4, 100)],
-        Duration::from_millis(30),
-    );
-}
-
 #[test]
 fn sweep_hand_at_measure_phase() {
     let center = egui::pos2(100.0, 80.0);
@@ -1217,69 +885,6 @@ fn sweep_stopped_pose_has_no_trail_or_lit_marks() {
     assert_eq!(
         stopped,
         paint_once(&ctx, &fresh, TopologyKind::Sweep, 360.0)
-    );
-}
-
-/// `state` lit `age` after its hits, painted as Sweep in a card-sized square.
-fn sweep_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
-    let Some(renderer) = renderer() else {
-        eprintln!("SKIPPED {name}: no wgpu adapter available");
-        return;
-    };
-    state.topology = TopologyKind::Sweep;
-    let at = Instant::now();
-    state.advance(at, 0.0);
-    let ids = ids(&state);
-    for &(i, beat, frame) in hits {
-        state.on_beat(&BeatEvent {
-            pulse: ids[i],
-            beat,
-            frame,
-            at,
-            muted: false,
-        });
-    }
-    state.advance(at + age, 0.0);
-    let size = 360.0;
-    let mut h = Harness::builder()
-        .with_size(Vec2::splat(size + 16.0))
-        .with_context_setup(theme::install)
-        .renderer(renderer)
-        .build_ui_state(
-            move |ui, state: &mut UiState| {
-                let card = state.theme.card;
-                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
-                let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::splat(size));
-                topo::paint(TopologyKind::Sweep, ui, state, rect);
-            },
-            state,
-        );
-    h.run();
-    h.snapshot_options(
-        name,
-        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
-    );
-}
-
-#[test]
-fn topology_sweep_hit_dark() {
-    sweep_snapshot(
-        "topology_sweep_hit_dark",
-        pt_br(playing(&[3, 4, 5])),
-        &[(0, 1, 100), (1, 2, 100), (2, 0, 100)],
-        Duration::from_millis(40),
-    );
-}
-
-#[test]
-fn topology_sweep_coincidence_light() {
-    let mut state = pt_br(playing(&[3, 4, 5]));
-    state.theme = Arc::new(Theme::builtin("light").unwrap());
-    sweep_snapshot(
-        "topology_sweep_coincidence_light",
-        state,
-        &[(0, 0, 100), (1, 0, 100), (2, 0, 100)],
-        Duration::from_millis(50),
     );
 }
 
@@ -1396,37 +1001,29 @@ fn polygons_disabled_pulse_has_no_effects() {
     assert!(dim < lit, "{dim} vs {lit}");
 }
 
-/// `state` lit `age` after its hits, painted as Polygons in a card-sized square.
-fn polygons_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
+/// Paints `kind` for `state` in a card-sized area: a 360 pt square, 360 x 180
+/// for Arcs, 360 pt wide and as low as Strings ask.
+fn snapshot(name: &str, mut state: UiState, kind: TopologyKind) {
     let Some(renderer) = renderer() else {
         eprintln!("SKIPPED {name}: no wgpu adapter available");
         return;
     };
-    state.topology = TopologyKind::Polygons;
-    let at = Instant::now();
-    state.advance(at, 0.0);
-    let ids = ids(&state);
-    for &(i, beat, frame) in hits {
-        state.on_beat(&BeatEvent {
-            pulse: ids[i],
-            beat,
-            frame,
-            at,
-            muted: false,
-        });
-    }
-    state.advance(at + age, 0.0);
-    let size = 360.0;
+    state.topology = kind;
+    let size = match topo::shape(kind, &state) {
+        topo::Shape::Aspect(ratio) => Vec2::new(360.0, 360.0 / ratio),
+        topo::Shape::Low(height) => Vec2::new(360.0, height),
+        topo::Shape::Square | topo::Shape::Hidden => Vec2::splat(360.0),
+    };
     let mut h = Harness::builder()
-        .with_size(Vec2::splat(size + 16.0))
+        .with_size(size + Vec2::splat(16.0))
         .with_context_setup(theme::install)
         .renderer(renderer)
         .build_ui_state(
             move |ui, state: &mut UiState| {
                 let card = state.theme.card;
                 ui.painter().rect_filled(ui.max_rect(), 0.0, card);
-                let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::splat(size));
-                topo::paint(TopologyKind::Polygons, ui, state, rect);
+                let rect = egui::Rect::from_min_size(ui.max_rect().min, size);
+                topo::paint(kind, ui, state, rect);
             },
             state,
         );
@@ -1437,24 +1034,140 @@ fn polygons_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)],
     );
 }
 
+/// `beats` at 120 BPM, played until `after` past beat `beat` of pulse `pulse`
+/// (counted from Play), in `theme` and pt-BR.
+fn played(beats: &[u32], theme: &str, pulse: usize, beat: u32, after: Duration) -> UiState {
+    let mut state = pt_br(playing(beats));
+    state.theme = Arc::new(Theme::builtin(theme).unwrap());
+    play_to(&mut state, pulse, beat, after);
+    state
+}
+
+/// Two measures in, just after beat 1 of every pulse: a coincidence.
+fn coincidence(beats: &[u32], theme: &str) -> UiState {
+    played(beats, theme, 0, 2 * beats[0], Duration::from_millis(50))
+}
+
 #[test]
-fn topology_polygons_hit_dark() {
-    polygons_snapshot(
-        "topology_polygons_hit_dark",
-        pt_br(playing(&[3, 4, 5])),
-        &[(0, 1, 100), (1, 2, 100), (2, 0, 100)],
-        Duration::from_millis(40),
+fn topology_2() {
+    // A coincidence that has settled: still lit, its flash gone.
+    let state = played(&[4, 3], "default", 0, 8, Duration::from_millis(400));
+    assert!(state.coincidence());
+    snapshot("topology_2", state, TopologyKind::Circle);
+}
+
+#[test]
+fn topology_2_en() {
+    let mut state = playing(&[4, 3]);
+    play_to(&mut state, 0, 8, Duration::from_millis(400));
+    snapshot("topology_2_en", state, TopologyKind::Circle);
+}
+
+#[test]
+fn topology_6() {
+    let state = played(
+        &[4, 3, 5, 7, 6, 8],
+        "default",
+        5,
+        7,
+        Duration::from_millis(30),
+    );
+    snapshot("topology_6", state, TopologyKind::Circle);
+}
+
+#[test]
+fn topology_many() {
+    let beats = [17, 23, 4, 5, 6, 32, 64, 12, 9, 3, 2, 1];
+    let state = played(&beats, "default", 2, 1, Duration::from_millis(40));
+    snapshot("topology_many", state, TopologyKind::Circle);
+}
+
+#[test]
+fn topology_circle_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 0, 1, Duration::from_millis(50));
+    snapshot("topology_circle_hit_dark", state, TopologyKind::Circle);
+}
+
+#[test]
+fn topology_circle_coincidence_light() {
+    let state = coincidence(&[3, 4, 5], "light");
+    assert!(state.coincidence());
+    snapshot(
+        "topology_circle_coincidence_light",
+        state,
+        TopologyKind::Circle,
     );
 }
 
 #[test]
+fn topology_strings_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 1, 2, Duration::from_millis(30));
+    snapshot("topology_strings_hit_dark", state, TopologyKind::Strings);
+}
+
+#[test]
+fn topology_strings_many_light() {
+    let beats = [17, 23, 4, 5, 6, 32, 64, 12];
+    let state = played(&beats, "light", 0, 5, Duration::from_millis(30));
+    snapshot("topology_strings_many_light", state, TopologyKind::Strings);
+}
+
+#[test]
+fn topology_arcs_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 0, 1, Duration::from_millis(40));
+    snapshot("topology_arcs_hit_dark", state, TopologyKind::Arcs);
+}
+
+#[test]
+fn topology_arcs_coincidence_light() {
+    let state = coincidence(&[3, 4, 5], "light");
+    assert!(state.coincidence());
+    snapshot("topology_arcs_coincidence_light", state, TopologyKind::Arcs);
+}
+
+#[test]
+fn topology_orbits_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 1, 2, Duration::from_millis(40));
+    snapshot("topology_orbits_hit_dark", state, TopologyKind::Orbits);
+}
+
+#[test]
+fn topology_orbits_many_light() {
+    let beats = [3, 4, 5, 7, 8, 9, 11, 13];
+    let state = played(&beats, "light", 2, 3, Duration::from_millis(30));
+    snapshot("topology_orbits_many_light", state, TopologyKind::Orbits);
+}
+
+#[test]
+fn topology_sweep_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 2, 3, Duration::from_millis(40));
+    snapshot("topology_sweep_hit_dark", state, TopologyKind::Sweep);
+}
+
+#[test]
+fn topology_sweep_coincidence_light() {
+    let state = coincidence(&[3, 4, 5], "light");
+    assert!(state.coincidence());
+    snapshot(
+        "topology_sweep_coincidence_light",
+        state,
+        TopologyKind::Sweep,
+    );
+}
+
+#[test]
+fn topology_polygons_hit_dark() {
+    let state = played(&[3, 4, 5], "default", 0, 2, Duration::from_millis(40));
+    snapshot("topology_polygons_hit_dark", state, TopologyKind::Polygons);
+}
+
+#[test]
 fn topology_polygons_many_light() {
-    let mut state = pt_br(playing(&[3, 4, 5, 7, 8, 9, 11, 30]));
-    state.theme = Arc::new(Theme::builtin("light").unwrap());
-    polygons_snapshot(
+    let beats = [3, 4, 5, 7, 8, 9, 11, 30];
+    let state = played(&beats, "light", 5, 4, Duration::from_millis(30));
+    snapshot(
         "topology_polygons_many_light",
         state,
-        &[(0, 1, 100), (2, 3, 100), (5, 4, 100)],
-        Duration::from_millis(30),
+        TopologyKind::Polygons,
     );
 }
