@@ -121,8 +121,12 @@ pub struct UiState {
     measure_secs: Option<f64>,
     /// Measure phase at the last `advance`.
     measure_phase: Option<f64>,
-    /// Whole measures since Play: 0 at the start, +1 at every wrap of `measure_phase`.
+    /// Whole measures since Play (or since the last `clear_beats`), from the
+    /// clock's unwrapped position.
     measure_count: u64,
+    /// The clock's whole measures that count as 0; `None` until the first
+    /// `advance` after Play or `clear_beats` sets it.
+    count_origin: Option<f64>,
     /// The `now` of the last `advance`.
     now: Instant,
     /// While a pulse card is dragged by its handle: (from, current target) indices.
@@ -175,6 +179,7 @@ impl Default for UiState {
             measure_secs: None,
             measure_phase: None,
             measure_count: 0,
+            count_origin: None,
             now: Instant::now(),
             dragging: None,
             messages: Arc::new(Messages::english()),
@@ -228,12 +233,14 @@ impl UiState {
         let shown_at = now.checked_sub(offset).unwrap_or(now);
         if self.playing != self.was_playing {
             if self.playing {
-                self.clock.start(shown_at);
-                self.measure_count = 0;
+                // Hold for one reference beat at the shown tempo.
+                let beat = 60.0 / f64::from(self.shown_bpm().get());
+                self.clock.start(shown_at, beat);
             } else {
                 self.clock.stop();
-                self.measure_count = 0;
             }
+            self.measure_count = 0;
+            self.count_origin = None;
             self.was_playing = self.playing;
         }
         let reference = self.pattern.reference_beats();
@@ -244,13 +251,14 @@ impl UiState {
                 self.measure_secs = Some(secs);
             }
         }
-        let phase = self.clock.phase(shown_at);
-        if let (Some(before), Some(now)) = (self.measure_phase, phase)
-            && now < before - 0.5
-        {
-            self.measure_count += 1;
+        let position = self.clock.position(shown_at);
+        self.measure_phase = self.clock.phase(shown_at);
+        if let Some(p) = position {
+            let origin = *self.count_origin.get_or_insert(p.floor());
+            // The count follows the position both ways, so it always agrees
+            // with the phase, even across a hitch or a correction.
+            self.measure_count = (p.floor() - origin).max(0.0) as u64;
         }
-        self.measure_phase = phase;
         let mut due = Vec::new();
         self.pending.retain(|ev| {
             if now >= ev.at + offset {
@@ -288,8 +296,11 @@ impl UiState {
         }
     }
 
-    /// Whole measures shown since Play (0 at the start, +1 at each wrap of
-    /// [`Self::measure_phase`]); 0 while stopped.
+    /// Whole measures shown since Play: 0 at the start, +1 each time
+    /// [`Self::measure_phase`] crosses the bar line forwards (and -1 if a
+    /// correction takes it back across). Counted from the clock's unwrapped
+    /// position, not from wraps between frames. 0 while stopped, and again
+    /// from 0 after [`Self::clear_beats`].
     pub fn measure_count(&self) -> u64 {
         self.measure_count
     }
@@ -434,6 +445,7 @@ impl UiState {
         self.lit.clear();
         self.clock.reset();
         self.measure_count = 0;
+        self.count_origin = None;
     }
 
     /// A tap at `now` (the TAP button, the global hotkey): pushes `Tap` and,

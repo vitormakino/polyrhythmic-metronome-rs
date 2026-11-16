@@ -912,14 +912,49 @@ fn measure_count_increments_on_wrap() {
     hit(&mut state, &[(0, 0, 1)]);
     let measure = Duration::from_secs_f64(3.0 * 60.0 / f64::from(state.shown_bpm().get()));
     let mut seen = state.measure_count();
-    for step in 1..=((measure.as_millis() as u32 * 25) / 10) {
+    // 10 ms steps over 2.5 measures.
+    for step in 1..=(measure.as_millis() as u32 * 25 / 100) {
         state.advance(at + Duration::from_millis(u64::from(step) * 10), 0.01);
         assert!(state.measure_count() >= seen);
         seen = state.measure_count();
     }
-    assert!(seen >= 2, "after 2.5 measures: {seen}");
+    assert_eq!(seen, 2, "after 2.5 measures");
     state.clear_beats();
     assert_eq!(state.measure_count(), 0);
+}
+
+#[test]
+fn measure_count_survives_a_hitch() {
+    let mut state = playing(&[3]);
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    state.on_beat(&event(&state, 0, 0, at, true));
+    // 120 BPM, 3 beats: a 1.5 s measure. One frame at 0.9 of the measure,
+    // the next one stalled until 1.6: the bar line went by unseen.
+    state.advance(at + Duration::from_millis(1350), 0.0);
+    assert_eq!(state.measure_count(), 0);
+    state.advance(at + Duration::from_millis(2400), 1.05);
+    assert_eq!(state.measure_count(), 1);
+    let phase = state.measure_phase().unwrap();
+    assert!((phase - 0.6).abs() < 1e-6, "{phase}");
+}
+
+#[test]
+fn play_holds_the_beat_one_pose_until_the_first_click() {
+    let mut state = playing(&[4, 3]);
+    let play = Instant::now();
+    state.advance(play, 0.0);
+    // The first click is 250 ms away (output latency); its event is known now.
+    let first = play + Duration::from_millis(250);
+    state.on_beat(&event(&state, 0, 0, first, false));
+    for ms in [16, 100, 200, 250] {
+        state.advance(play + Duration::from_millis(ms), 0.016);
+        assert_eq!(state.measure_phase(), Some(0.0), "moved at +{ms} ms");
+    }
+    // Then it moves forward from beat 1 (2 s measure), with no step back.
+    state.advance(first + Duration::from_millis(100), 0.016);
+    let phase = state.measure_phase().unwrap();
+    assert!((phase - 0.05).abs() < 1e-6, "{phase}");
 }
 
 #[test]
