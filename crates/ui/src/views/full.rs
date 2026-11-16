@@ -278,7 +278,11 @@ fn topology_card(ui: &mut Ui, rect: Rect, state: &UiState) {
         );
         node.widget_info(|| WidgetInfo::labeled(Role::Label, true, &title));
         inner = if short {
-            Rect::from_min_max(pos2(rect.left(), rect.top() + 26.0), rect.max).shrink(6.0)
+            Rect::from_min_max(
+                pos2(rect.left(), rect.top() + topology::CARD_TITLE_STRIP),
+                rect.max,
+            )
+            .shrink(topology::CARD_INNER_PAD)
         } else {
             inner.shrink(12.0)
         };

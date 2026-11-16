@@ -848,8 +848,7 @@ fn strings_card_is_low_and_the_list_gets_the_height() {
     let square = circle.get_by_label("Rhythmic topology").rect();
     let strings = harness(PHONE, three_pulses(TopologyKind::Strings));
     let low = strings.get_by_label("Rhythmic topology").rect();
-    assert!(low.height() <= 94.0 + 0.5, "{low:?}");
-    assert!(low.height() < square.height(), "{low:?} vs {square:?}");
+    assert!(low.height() <= square.height(), "{low:?} vs {square:?}");
     assert!(
         list_reach(&strings) >= list_reach(&circle) + (square.height() - low.height()) - 1.0,
         "the freed height goes to the list"

@@ -70,9 +70,7 @@ pub enum Shape {
 /// The shape `kind` wants for `state`'s pattern.
 pub fn shape(kind: TopologyKind, state: &UiState) -> Shape {
     match kind {
-        TopologyKind::Strings => {
-            Shape::Low((28.0 + 22.0 * state.pattern.pulses.len() as f32).min(200.0))
-        }
+        TopologyKind::Strings => Shape::Low(strings::card_height(state.pattern.pulses.len())),
         TopologyKind::Arcs => Shape::Aspect(2.0),
         TopologyKind::Hidden => Shape::Hidden,
         TopologyKind::Circle
@@ -203,8 +201,13 @@ fn draw(kind: TopologyKind, ui: &Ui, state: &UiState, rect: Rect, response: &Res
     indicators(&painter, rect, strip, state);
 }
 
+/// Height of the title strip a short topology card keeps on top.
+pub(crate) const CARD_TITLE_STRIP: f32 = 26.0;
+/// Padding the card keeps around its drawing area, per side.
+pub(crate) const CARD_INNER_PAD: f32 = 6.0;
+
 /// Height reserved under the drawing for the indicators.
-fn strip_height(size: f32) -> f32 {
+pub(crate) fn strip_height(size: f32) -> f32 {
     (size * 0.1).clamp(18.0, 30.0)
 }
 

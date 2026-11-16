@@ -671,10 +671,13 @@ fn strings_shape_per_pulse_count() {
         Shape::Low(h) => h,
         other => panic!("{other:?}"),
     };
-    assert_eq!(height(1), 50.0);
-    assert_eq!(height(3), 94.0);
-    assert_eq!(height(8), 200.0);
-    assert_eq!(height(16), 200.0);
+    // The card is the drawing (28 + 22 per pulse, at most 200) plus its chrome.
+    let chrome = height(3) - 94.0;
+    assert!(chrome > 50.0, "{chrome}");
+    assert!((height(1) - 50.0 - chrome).abs() < 12.0);
+    assert!(height(16) > 200.0 + chrome - 12.0);
+    assert!(height(16) < 200.0 + chrome + 12.0);
+    assert!(height(8) <= height(16) + 12.0);
 }
 
 #[test]

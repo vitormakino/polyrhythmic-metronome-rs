@@ -53,6 +53,8 @@ impl StringsStyle {
 /// Room kept free left and right of the strings, and above and below.
 const MARGIN: f32 = 14.0;
 const VERTICAL_MARGIN: f32 = 6.0;
+/// The most a string may swing, as a share of the spacing between strings.
+const MAX_SWING: f32 = 0.4;
 /// Fewest segments of a string, however heavy the load.
 const MIN_SEGMENTS: usize = 24;
 /// Below this an effect's envelope is not drawn at all.
@@ -61,6 +63,29 @@ const VISIBLE: f32 = 0.01;
 const MIN_MARK_SPACING: f32 = 2.5;
 /// Radius of an idle mark.
 const MARK: f32 = 2.5;
+
+/// Height of the strings themselves: 28 pt plus 22 per pulse, at most 200.
+fn drawing_height(pulses: usize) -> f32 {
+    (28.0 + 22.0 * pulses as f32).min(200.0)
+}
+
+/// Height of a card whose strings get [`drawing_height`]: the drawing plus
+/// the card's own chrome (title strip and padding, the indicator strip, the
+/// strings' vertical margins). It is solved for the indicator strip, which
+/// is a tenth of the area above it (see [`super::strip_height`]).
+pub(super) fn card_height(pulses: usize) -> f32 {
+    let drawing = drawing_height(pulses) + 2.0 * VERTICAL_MARGIN;
+    let strip = super::strip_height(drawing * 10.0 / 9.0);
+    let strip = super::strip_height(drawing + strip);
+    drawing + strip + super::CARD_TITLE_STRIP + 2.0 * super::CARD_INNER_PAD
+}
+
+/// How much of the swing a string keeps when strings are `row` pt apart: 1,
+/// or less so that pluck and ripple together stay within [`MAX_SWING`] of the spacing.
+fn swing_scale(row: f32) -> f32 {
+    let style = StringsStyle::DEFAULT;
+    (MAX_SWING * row / (style.pluck + style.ripple)).clamp(0.0, 1.0)
+}
 
 /// Where the cursor is, `phase` (in `[0, 1]`) of the way across `track`.
 pub fn cursor_x(track: Rect, phase: f64) -> f32 {
@@ -138,6 +163,7 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
         pos2(area.right() - MARGIN, area.bottom() - VERTICAL_MARGIN),
     );
     let row = track.height() / pulses.len() as f32;
+    let swing = swing_scale(row);
     for (index, pulse) in pulses.iter().enumerate() {
         let y = track.top() + row * (index as f32 + 0.5);
         let opacity = if pulse.enabled { 1.0 } else { 0.2 };
@@ -157,7 +183,9 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
             .map(|k| {
                 let u = k as f32 / segments as f32;
                 let wobble = match pluck {
-                    Some(p) if decay > VISIBLE => displacement(u, p, age) + ripple(&style, u, age),
+                    Some(p) if decay > VISIBLE => {
+                        (displacement(u, p, age) + ripple(&style, u, age)) * swing
+                    }
                     _ => 0.0,
                 };
                 pos2(x_of(u), y + wobble)
@@ -221,6 +249,31 @@ pub(super) fn paint(painter: &Painter, frame: &TopologyFrame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn three_strings_get_94_pt() {
+        assert_eq!(drawing_height(3), 28.0 + 66.0);
+        assert_eq!(drawing_height(16), 200.0);
+        // The card's area minus the strip and the strings' margins is the drawing.
+        let card = card_height(3);
+        let area = card - super::super::CARD_TITLE_STRIP - 2.0 * super::super::CARD_INNER_PAD;
+        let strip = super::super::strip_height(area);
+        assert!((area - strip - 2.0 * VERTICAL_MARGIN - 94.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn swing_stays_within_the_spacing() {
+        let style = StringsStyle::DEFAULT;
+        for pulses in 1..=16 {
+            let row = drawing_height(pulses) / pulses as f32;
+            let peak = (style.pluck + style.ripple) * swing_scale(row);
+            assert!(peak <= MAX_SWING * row + 1e-4, "{pulses}: {peak} vs {row}");
+        }
+        assert!(
+            (swing_scale(200.0) - 1.0).abs() < 1e-6,
+            "roomy rows keep it all"
+        );
+    }
 
     #[test]
     fn triangle_peaks_at_the_pluck() {
