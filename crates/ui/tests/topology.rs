@@ -1210,3 +1210,179 @@ fn topology_sweep_coincidence_light() {
         Duration::from_millis(50),
     );
 }
+
+#[test]
+fn polygon_runner_on_vertex_at_each_beat() {
+    let center = egui::pos2(100.0, 100.0);
+    for beats in [3u32, 4, 7, 24, 40] {
+        for k in 0..beats * 2 {
+            let at = topo::polygons_runner(center, 50.0, beats, f64::from(k));
+            let vertex = topo::polygons_vertex(center, 50.0, beats, k % beats);
+            assert!((at - vertex).length() < 1e-3, "{beats} beats, beat {k}");
+        }
+        // Beat 1 is the top vertex.
+        let top = topo::polygons_vertex(center, 50.0, beats, 0);
+        assert!((top.x - 100.0).abs() < 1e-3 && (top.y - 50.0).abs() < 1e-3);
+        // Constant speed: the same step along an edge covers the same distance.
+        let a = topo::polygons_runner(center, 50.0, beats, 0.2);
+        let b = topo::polygons_runner(center, 50.0, beats, 0.4);
+        let c = topo::polygons_runner(center, 50.0, beats, 1.2);
+        let d = topo::polygons_runner(center, 50.0, beats, 1.4);
+        assert!(((b - a).length() - (d - c).length()).abs() < 1e-3);
+    }
+}
+
+#[test]
+fn polygon_one_and_two_beats_degenerate() {
+    let center = egui::pos2(100.0, 100.0);
+    // One beat: a single point, at the top.
+    for phase in [0.0, 0.3, 0.9, 4.5] {
+        let at = topo::polygons_runner(center, 50.0, 1, phase);
+        assert!((at - egui::pos2(100.0, 50.0)).length() < 1e-3, "{phase}");
+    }
+    // Two beats: a line through the top and the bottom, there and back.
+    let bottom = egui::pos2(100.0, 150.0);
+    assert!((topo::polygons_vertex(center, 50.0, 2, 1) - bottom).length() < 1e-3);
+    let mid = topo::polygons_runner(center, 50.0, 2, 0.5);
+    assert!((mid - center).length() < 1e-3);
+    let back = topo::polygons_runner(center, 50.0, 2, 1.5);
+    assert!((back - center).length() < 1e-3);
+    assert!((topo::polygons_runner(center, 50.0, 2, 1.0) - bottom).length() < 1e-3);
+    assert!(
+        (topo::polygons_runner(center, 50.0, 2, 2.0) - egui::pos2(100.0, 50.0)).length() < 1e-3
+    );
+}
+
+#[test]
+fn polygons_shape_budget() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[pm_core::MAX_LOADED_BEATS; pm_core::MAX_PULSES]);
+    state.bpm = pm_core::Bpm::new(40);
+    hit_all_at(&mut state, 5, Instant::now(), Duration::from_millis(40));
+    assert!(topo::frame(&state).pulses.iter().all(|p| p.hit.is_some()));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Polygons, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+    // Wobbling edges up to the cut-off, a fast measure, and a huge reference.
+    let mut state = playing(&[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 24, 1024]);
+    state.bpm = pm_core::Bpm::new(300);
+    hit_all_at(&mut state, 2, Instant::now(), Duration::from_millis(40));
+    let shapes = paint_once(&ctx, &state, TopologyKind::Polygons, 360.0);
+    assert!(shapes < 20_000, "{shapes} shapes");
+}
+
+#[test]
+fn polygons_stopped_pose_has_no_effects() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[4, 3]);
+    hit(&mut state, &[(0, 1, 10), (1, 2, 10)]);
+    let moving = paint_once(&ctx, &state, TopologyKind::Polygons, 360.0);
+    state.playing = false;
+    state.advance(state.now() + Duration::from_millis(16), 0.016);
+    let frame = topo::frame(&state);
+    assert!(
+        frame
+            .pulses
+            .iter()
+            .all(|p| p.hit.is_none() && p.phase.is_none())
+    );
+    assert_eq!(frame.coincidence_age, None);
+    let stopped = paint_once(&ctx, &state, TopologyKind::Polygons, 360.0);
+    assert!(stopped < moving, "{stopped} vs {moving}");
+    // The same pattern never played: just polygons, vertices and runners on vertex 0.
+    let mut fresh = playing(&[4, 3]);
+    fresh.playing = false;
+    fresh.advance(fresh.now() + Duration::from_millis(16), 0.016);
+    assert_eq!(
+        stopped,
+        paint_once(&ctx, &fresh, TopologyKind::Polygons, 360.0)
+    );
+}
+
+#[test]
+fn polygons_disabled_pulse_has_no_effects() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut state = playing(&[4, 3]);
+    for id in ids(&state) {
+        state.pattern.set_enabled(id, false);
+    }
+    hit(&mut state, &[(0, 1, 10), (1, 2, 10)]);
+    let frame = topo::frame(&state);
+    assert!(
+        frame
+            .pulses
+            .iter()
+            .all(|p| p.hit.is_none() && p.phase.is_some())
+    );
+    // The same hits on enabled pulses add wobble points and sparks.
+    let mut enabled = playing(&[4, 3]);
+    hit(&mut enabled, &[(0, 1, 10), (1, 2, 10)]);
+    let lit = paint_once(&ctx, &enabled, TopologyKind::Polygons, 360.0);
+    let dim = paint_once(&ctx, &state, TopologyKind::Polygons, 360.0);
+    assert!(dim < lit, "{dim} vs {lit}");
+}
+
+/// `state` lit `age` after its hits, painted as Polygons in a card-sized square.
+fn polygons_snapshot(name: &str, mut state: UiState, hits: &[(usize, u32, u64)], age: Duration) {
+    let Some(renderer) = renderer() else {
+        eprintln!("SKIPPED {name}: no wgpu adapter available");
+        return;
+    };
+    state.topology = TopologyKind::Polygons;
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    let ids = ids(&state);
+    for &(i, beat, frame) in hits {
+        state.on_beat(&BeatEvent {
+            pulse: ids[i],
+            beat,
+            frame,
+            at,
+            muted: false,
+        });
+    }
+    state.advance(at + age, 0.0);
+    let size = 360.0;
+    let mut h = Harness::builder()
+        .with_size(Vec2::splat(size + 16.0))
+        .with_context_setup(theme::install)
+        .renderer(renderer)
+        .build_ui_state(
+            move |ui, state: &mut UiState| {
+                let card = state.theme.card;
+                ui.painter().rect_filled(ui.max_rect(), 0.0, card);
+                let rect = egui::Rect::from_min_size(ui.max_rect().min, Vec2::splat(size));
+                topo::paint(TopologyKind::Polygons, ui, state, rect);
+            },
+            state,
+        );
+    h.run();
+    h.snapshot_options(
+        name,
+        &SnapshotOptions::new().threshold(2.0).max_failed_pixels(100),
+    );
+}
+
+#[test]
+fn topology_polygons_hit_dark() {
+    polygons_snapshot(
+        "topology_polygons_hit_dark",
+        pt_br(playing(&[3, 4, 5])),
+        &[(0, 1, 100), (1, 2, 100), (2, 0, 100)],
+        Duration::from_millis(40),
+    );
+}
+
+#[test]
+fn topology_polygons_many_light() {
+    let mut state = pt_br(playing(&[3, 4, 5, 7, 8, 9, 11, 30]));
+    state.theme = Arc::new(Theme::builtin("light").unwrap());
+    polygons_snapshot(
+        "topology_polygons_many_light",
+        state,
+        &[(0, 1, 100), (2, 3, 100), (5, 4, 100)],
+        Duration::from_millis(30),
+    );
+}
