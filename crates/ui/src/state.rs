@@ -1,11 +1,12 @@
 //! What the views draw from and edit: the pattern, the tempo, transport and
-//! window mode, plus the visual beat state (which beat is lit, flash springs)
+//! window mode, plus the visual beat state (which beat is lit, hit ages)
 //! kept in sync with the audio through `visual_offset`.
 //!
 //! Views never talk to the audio engine: they edit [`UiState`] and return
 //! [`UiAction`]s for the app to forward.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::clock::MeasureClock;
 use crate::i18n::Messages;
-use crate::spring::Spring;
 use crate::theme::{DARK, Theme};
 
 /// A practice session the user can start: the name shown in the list and the
@@ -62,14 +62,37 @@ pub enum UiAction {
     TakeOverPulse(usize),
 }
 
-/// The beat a pulse lit last and its flash animation.
+/// Time constant of the flash envelope, in seconds.
+const FLASH_TAU: f32 = 0.12;
+/// Time constant of a dot lighting up, in seconds.
+const DOT_RISE_TAU: f32 = 0.03;
+/// Time constant of the previous beat's dot fading out, in seconds.
+const DOT_FALL_TAU: f32 = 0.06;
+/// A hit younger than this keeps the app repainting, in seconds.
+const ANIMATING_SECS: f32 = 1.0;
+
+/// The last hit of a pulse, as shown: which beat, which audio frame and how
+/// long ago it touched its mark.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hit {
+    /// Beat index within the pulse.
+    pub beat: u32,
+    /// Audio frame of the hit, to tell hits of one instant from stale ones.
+    pub frame: u64,
+    /// Seconds since the hit's `at + visual_offset`, as of the last `advance`.
+    pub age: f32,
+}
+
+/// The beat a pulse lit last, the one before it, and their ages.
 #[derive(Clone, Copy, Debug)]
 struct Lit {
-    beat: u32,
-    /// Audio frame of the hit, to tell hits of one instant from stale ones.
-    frame: u64,
-    /// 1 right after the beat, springs back to 0.
-    flash: Spring,
+    hit: Hit,
+    /// Beat lit before this one, still fading out.
+    prev: Option<u32>,
+    /// The hit's `ev.at`; the age counts from here in the shown time domain.
+    at: Instant,
+    /// The pulse was shown enabled at the last `advance`.
+    on: bool,
 }
 
 pub struct UiState {
@@ -88,8 +111,6 @@ pub struct UiState {
     tap_epoch: Instant,
     pending: VecDeque<BeatEvent>,
     lit: HashMap<PulseId, Lit>,
-    /// Per pulse, one spring per beat: 0 idle, 1 lit. Drives the topology dots.
-    dots: HashMap<PulseId, Vec<Spring>>,
     settings_open: HashSet<PulseId>,
     /// Continuous measure position, fed by every beat event while playing.
     clock: MeasureClock,
@@ -143,7 +164,6 @@ impl Default for UiState {
             tap_epoch: Instant::now(),
             pending: VecDeque::with_capacity(PENDING_BEATS_CAP),
             lit: HashMap::new(),
-            dots: HashMap::new(),
             settings_open: HashSet::new(),
             clock: MeasureClock::default(),
             was_playing: false,
@@ -193,8 +213,9 @@ impl UiState {
     }
 
     /// Lights every queued beat whose `at + visual_offset` has passed and
-    /// steps the flash springs by `dt` seconds.
-    pub fn advance(&mut self, now: Instant, dt: f32) {
+    /// ages every hit to the shown time (`now - visual_offset`). `dt` is unused:
+    /// the lights are functions of time, not integrated.
+    pub fn advance(&mut self, now: Instant, _dt: f32) {
         let offset = self.visual_offset;
         self.now = now;
         let shown_at = now.checked_sub(offset).unwrap_or(now);
@@ -226,35 +247,28 @@ impl UiState {
         });
         due.sort_by_key(|ev| ev.frame);
         for ev in due {
-            let mut flash = Spring::new(1.0);
-            flash.target = 0.0;
+            let prev = self.lit.get(&ev.pulse).map(|l| l.hit.beat);
             self.lit.insert(
                 ev.pulse,
                 Lit {
-                    beat: ev.beat,
-                    frame: ev.frame,
-                    flash,
+                    hit: Hit {
+                        beat: ev.beat,
+                        frame: ev.frame,
+                        age: 0.0,
+                    },
+                    prev,
+                    at: ev.at,
+                    on: true,
                 },
             );
         }
         let shown = self.shown_enabled();
         let pattern = &self.pattern;
         self.lit.retain(|id, _| pattern.pulse(*id).is_some());
-        for lit in self.lit.values_mut() {
-            lit.flash.step(dt);
-        }
-        self.dots.retain(|id, _| pattern.pulse(*id).is_some());
         for (pulse, &enabled) in pattern.pulses.iter().zip(&shown) {
-            let lit_beat = self
-                .lit
-                .get(&pulse.id)
-                .filter(|_| enabled)
-                .map(|l| l.beat as usize);
-            let springs = self.dots.entry(pulse.id).or_default();
-            springs.resize(pulse.beats as usize, Spring::new(0.0));
-            for (i, spring) in springs.iter_mut().enumerate() {
-                spring.target = if lit_beat == Some(i) { 1.0 } else { 0.0 };
-                spring.step(dt);
+            if let Some(lit) = self.lit.get_mut(&pulse.id) {
+                lit.hit.age = shown_at.saturating_duration_since(lit.at).as_secs_f32();
+                lit.on = enabled;
             }
         }
     }
@@ -279,14 +293,37 @@ impl UiState {
 
     /// The beat of `pulse` that is lit now, if any.
     pub fn active_beat(&self, pulse: PulseId) -> Option<u32> {
-        self.lit.get(&pulse).map(|l| l.beat)
+        self.lit.get(&pulse).map(|l| l.hit.beat)
     }
 
-    /// Flash strength of `pulse` in 0..=1: 1 on a beat, springing back to 0.
+    /// The last hit of `pulse` that was shown, with its age.
+    pub fn hit(&self, pulse: PulseId) -> Option<Hit> {
+        self.lit.get(&pulse).map(|l| l.hit)
+    }
+
+    /// A stable seed for the effects of one hit, from the pulse and the audio
+    /// frame. A pure hash (FNV-1a), no RNG: equal inputs always give equal seeds.
+    pub fn seed(pulse: PulseId, frame: u64) -> u64 {
+        struct Fnv(u64);
+        impl Hasher for Fnv {
+            fn finish(&self) -> u64 {
+                self.0
+            }
+            fn write(&mut self, bytes: &[u8]) {
+                for &b in bytes {
+                    self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+        }
+        let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+        pulse.hash(&mut h);
+        frame.hash(&mut h);
+        h.finish()
+    }
+
+    /// Flash strength of `pulse` in 0..=1: 1 on a beat, `exp(-age / 0.12)` after.
     pub fn flash(&self, pulse: PulseId) -> f32 {
-        self.lit
-            .get(&pulse)
-            .map_or(0.0, |l| l.flash.value.clamp(0.0, 1.0))
+        self.lit.get(&pulse).map_or(0.0, |l| flash_of(l.hit.age))
     }
 
     /// Beats queued and not yet lit.
@@ -294,30 +331,55 @@ impl UiState {
         self.pending.len()
     }
 
-    /// How active dot `beat` of `pulse` is: 0 idle, 1 lit (springs, may overshoot a little).
+    /// How active dot `beat` of `pulse` is: 0 idle, 1 lit. The lit beat rises
+    /// as `1 - exp(-age / 0.03)`; the one before it fades as `exp(-age / 0.06)`
+    /// of the newer hit's age. A pulse not shown enabled stays at 0.
     pub fn dot(&self, pulse: PulseId, beat: u32) -> f32 {
-        self.dots
-            .get(&pulse)
-            .and_then(|springs| springs.get(beat as usize))
-            .map_or(0.0, |s| s.value.clamp(0.0, 1.5))
+        let Some(l) = self.lit.get(&pulse).filter(|l| l.on) else {
+            return 0.0;
+        };
+        if self.pattern.pulse(pulse).is_none_or(|p| beat >= p.beats) {
+            return 0.0;
+        }
+        let age = l.hit.age.max(0.0);
+        if beat == l.hit.beat {
+            1.0 - (-age / DOT_RISE_TAU).exp()
+        } else if l.prev == Some(beat) {
+            (-age / DOT_FALL_TAU).exp()
+        } else {
+            0.0
+        }
     }
 
     /// True when every enabled pulse is on beat 0 and all those hits share one audio frame.
     pub fn coincidence(&self) -> bool {
+        self.coincident_hit().is_some()
+    }
+
+    /// Age of the hit that made [`Self::coincidence`] true, in seconds.
+    pub fn coincidence_age(&self) -> Option<f32> {
+        self.coincident_hit().map(|h| h.age)
+    }
+
+    /// The shared hit of a coincidence: the youngest of the hits that agree.
+    fn coincident_hit(&self) -> Option<Hit> {
         if !self.playing {
-            return false;
+            return None;
         }
-        let mut frame = None;
+        let mut found: Option<Hit> = None;
         let shown = self.shown_enabled();
         for (pulse, _) in self.pattern.pulses.iter().zip(shown).filter(|(_, on)| *on) {
             match self.lit.get(&pulse.id) {
-                Some(l) if l.beat == 0 && frame.is_none_or(|f| f == l.frame) => {
-                    frame = Some(l.frame);
+                Some(l) if l.hit.beat == 0 && found.is_none_or(|f| f.frame == l.hit.frame) => {
+                    found = Some(match found {
+                        Some(f) if f.age <= l.hit.age => f,
+                        _ => l.hit,
+                    });
                 }
-                _ => return false,
+                _ => return None,
             }
         }
-        frame.is_some()
+        found
     }
 
     /// Strongest flash among enabled pulses sitting on beat 0 (0 if none): the
@@ -328,24 +390,22 @@ impl UiState {
             .iter()
             .zip(self.shown_enabled())
             .filter(|(_, on)| *on)
-            .filter_map(|(p, _)| self.lit.get(&p.id).filter(|l| l.beat == 0))
-            .map(|l| l.flash.value.clamp(0.0, 1.0))
+            .filter_map(|(p, _)| self.lit.get(&p.id).filter(|l| l.hit.beat == 0))
+            .map(|l| flash_of(l.hit.age))
             .fold(0.0, f32::max)
     }
 
-    /// True while a beat is waiting to light or a flash is still moving,
+    /// True while a beat is waiting to light or a hit is younger than a second,
     /// so the app keeps repainting.
     pub fn animating(&self) -> bool {
-        !self.pending.is_empty()
-            || self.lit.values().any(|l| !l.flash.settled())
-            || self.dots.values().flatten().any(|s| !s.settled())
+        !self.pending.is_empty() || self.lit.values().any(|l| l.hit.age < ANIMATING_SECS)
     }
 
     /// Unlights everything and drops queued beats (on stop).
     pub fn clear_beats(&mut self) {
         self.pending.clear();
         self.lit.clear();
-        self.dots.clear();
+        self.clock.reset();
     }
 
     /// A tap at `now` (the TAP button, the global hotkey): pushes `Tap` and,
@@ -477,6 +537,11 @@ impl UiState {
 }
 
 /// `enabled` as `mask` overrides it at position `index`.
+/// Flash envelope of a hit `age` seconds old.
+fn flash_of(age: f32) -> f32 {
+    (-age.max(0.0) / FLASH_TAU).exp().clamp(0.0, 1.0)
+}
+
 fn shown(enabled: bool, mask: Option<PulseMask>, index: usize) -> bool {
     let Some(mask) = mask else {
         return enabled;

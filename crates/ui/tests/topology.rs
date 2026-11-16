@@ -371,3 +371,42 @@ fn muted_events_still_anchor() {
     assert_eq!(state.active_beat(ids(&state)[0]), None);
     assert_eq!(state.pending_beats(), 0);
 }
+
+#[test]
+fn hit_age_counts_from_shown_time() {
+    let mut state = playing(&[4]);
+    state.visual_offset = Duration::from_millis(50);
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    state.on_beat(&event(&state, 0, 1, at, false));
+    state.advance(at + Duration::from_millis(80), 0.0);
+    let hit = state.hit(ids(&state)[0]).expect("lit");
+    assert_eq!(hit.beat, 1);
+    assert!((hit.age - 0.03).abs() < 1e-3, "{}", hit.age);
+}
+
+#[test]
+fn seed_is_stable() {
+    let id = ids(&playing(&[4]))[0];
+    assert_eq!(UiState::seed(id, 9), UiState::seed(id, 9));
+    assert_ne!(UiState::seed(id, 9), UiState::seed(id, 10));
+}
+
+#[test]
+fn clear_beats_resets_clock() {
+    let mut state = playing(&[4]);
+    let at = Instant::now();
+    state.advance(at, 0.0);
+    // Anchor beat 0 at +1 s (2 s measure), then hide and show again.
+    let first = at + Duration::from_secs(1);
+    state.on_beat(&event(&state, 0, 0, first, true));
+    state.advance(first + Duration::from_millis(100), 0.0);
+    state.clear_beats();
+    // Beat 1 is phase 0.25; without the reset the clock would only slew
+    // towards it, with it the first anchor snaps.
+    let next = first + Duration::from_millis(300);
+    state.on_beat(&event(&state, 0, 1, next, true));
+    state.advance(next, 0.0);
+    let phase = state.measure_phase().expect("playing");
+    assert!((phase - 0.25).abs() < 1e-6, "{phase}");
+}
